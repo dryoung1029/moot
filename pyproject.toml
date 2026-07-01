@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "moot-hub"
+version = "0.1.0"
+description = "The Moot — an MCP collaboration hub for a fleet of agentic coders, kept by Bill."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "The Prime" }]
+dependencies = [
+    "mcp>=1.2",
+    "uvicorn>=0.27",
+]
+
+[project.scripts]
+moot-hub = "moot.server:main"
+moot-admin = "moot.admin:main"
+
+[tool.setuptools]
+packages = ["moot"]
+
+[tool.setuptools.package-data]
+moot = ["schema.sql"]

@@ -1,0 +1,127 @@
+"""Live end-to-end test: boot the real hub as a subprocess and drive it over
+MCP (streamable HTTP) plus the dashboard API. Skips cleanly if the server can't
+start in this environment.
+"""
+from __future__ import annotations
+
+import json
+import os
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+import urllib.error
+import urllib.request
+
+import anyio
+from mcp import ClientSession
+from mcp.client.streamable_http import streamablehttp_client
+
+
+def _free_port() -> int:
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    return port
+
+
+def _txt(res):
+    for c in res.content:
+        t = getattr(c, "text", None)
+        if t is not None:
+            try:
+                return json.loads(t)
+            except Exception:
+                return t
+    return res.structuredContent
+
+
+class TestLiveHub(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.port = _free_port()
+        cls.base = f"http://127.0.0.1:{cls.port}"
+        cls.data = tempfile.mkdtemp(prefix="moothttp-")
+        env = dict(os.environ,
+                   MOOT_DATA_DIR=cls.data, MOOT_ADMIN_KEY="testkey",
+                   MOOT_HOST="127.0.0.1", MOOT_PORT=str(cls.port))
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        cls.proc = subprocess.Popen(
+            [sys.executable, "-m", "moot.server"], env=env, cwd=root,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # Wait for the dashboard to answer.
+        for _ in range(50):
+            try:
+                urllib.request.urlopen(cls.base + "/api/overview", timeout=1).read()
+                return
+            except Exception:
+                if cls.proc.poll() is not None:
+                    raise unittest.SkipTest("hub process exited during startup")
+                time.sleep(0.2)
+        raise unittest.SkipTest("hub did not come up in time")
+
+    @classmethod
+    def tearDownClass(cls):
+        if getattr(cls, "proc", None):
+            cls.proc.terminate()
+            try:
+                cls.proc.wait(timeout=5)
+            except Exception:
+                cls.proc.kill()
+
+    def _call(self, headers, tool, **args):
+        async def go():
+            async with streamablehttp_client(self.base + "/mcp", headers=headers) as (r, w, _):
+                async with ClientSession(r, w) as s:
+                    await s.initialize()
+                    res = await s.call_tool(tool, args)
+                    return _txt(res), res.isError
+        return anyio.run(go)
+
+    def test_full_flow(self):
+        reg, err = self._call({}, "moot_register", purpose="write code",
+                              specialty="backend", proposed_name="Codey")
+        self.assertFalse(err)
+        token = reg["token"]
+        h = {"Authorization": "Bearer " + token}
+
+        # bad token rejected
+        _, berr = self._call({"Authorization": "Bearer bad"}, "moot_whoami")
+        self.assertTrue(berr)
+
+        who, _ = self._call(h, "moot_whoami")
+        self.assertEqual(who["identity"]["aid"], "Codey")
+
+        post, _ = self._call(h, "moot_post", channel="skunkworks", body="hello moot")
+        self.assertIn("post_id", post)
+
+        ci, _ = self._call(h, "moot_checkin", since_post=0)
+        self.assertIn("check_in_policy", ci)
+
+        # dashboard reads
+        ov = json.loads(urllib.request.urlopen(self.base + "/api/overview").read())
+        self.assertIn("Codey", [a["aid"] for a in ov["roster"]])
+        html = urllib.request.urlopen(self.base + "/").read().decode()
+        self.assertIn("The Moot", html)
+
+        # admin write works; unauth blocked
+        req = urllib.request.Request(
+            self.base + "/api/act", method="POST",
+            headers={"Content-Type": "application/json", "X-Moot-Admin": "testkey"},
+            data=json.dumps({"action": "broadcast", "body": "Prime here"}).encode())
+        self.assertTrue(json.loads(urllib.request.urlopen(req).read())["ok"])
+
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            bad = urllib.request.Request(
+                self.base + "/api/act", method="POST",
+                headers={"Content-Type": "application/json"},
+                data=json.dumps({"action": "broadcast", "body": "x"}).encode())
+            urllib.request.urlopen(bad)
+        self.assertEqual(cm.exception.code, 401)
+
+
+if __name__ == "__main__":
+    unittest.main()

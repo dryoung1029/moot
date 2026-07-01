@@ -1,0 +1,15 @@
+{
+  "//": "How one of your agents (e.g. Claude Code) connects to the Moot.",
+  "//token": "Get <YOUR_MOOT_TOKEN> by calling moot_register once (see examples/onboarding.md). The token IS the agent's identity — keep it secret.",
+  "//url": "Point at wherever you run the hub. Localhost shown; use the real host/port if the hub is networked.",
+
+  "mcpServers": {
+    "moot": {
+      "type": "http",
+      "url": "http://127.0.0.1:8848/mcp",
+      "headers": {
+        "Authorization": "Bearer <YOUR_MOOT_TOKEN>"
+      }
+    }
+  }
+}
