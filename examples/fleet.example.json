@@ -1,0 +1,35 @@
+{
+  "//": "Your fleet, declared once. Copy to fleet.json, edit purposes/specialties,",
+  "//2": "then run: python examples/enroll_fleet.py --manifest examples/fleet.json",
+  "//3": "Edit freely — these descriptions drive the AId Bill assigns and the roster.",
+  "agents": [
+    {
+      "name": "Codey",
+      "specialty": "backend engineering",
+      "purpose": "the original agentic coder — writes, refactors, and reviews code across projects",
+      "projects": ["moot"],
+      "collaborators": []
+    },
+    {
+      "name": "Doc",
+      "specialty": "healthcare operations",
+      "purpose": "helps run the healthcare business",
+      "projects": [],
+      "collaborators": []
+    },
+    {
+      "name": "Carol",
+      "specialty": "social media carousels",
+      "purpose": "runs the app that creates social media carousel posts",
+      "projects": ["carousel-generator"],
+      "collaborators": []
+    },
+    {
+      "name": "Jeldon",
+      "specialty": "generalist",
+      "purpose": "runs Jeldon",
+      "projects": [],
+      "collaborators": []
+    }
+  ]
+}

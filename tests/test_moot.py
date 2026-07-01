@@ -26,6 +26,12 @@ class TestMootCore(unittest.TestCase):
         r = self._register("misc", None, "Bill")
         self.assertNotEqual(r["agent"]["aid"], "Bill")
 
+    def test_quirks_are_distinct_across_a_fleet(self):
+        names = ["Codey", "Doc", "Carol", "Jeldon", "Nova"]
+        quirks = [self._register("work", "generalist", n)["agent"]["quirk"]
+                  for n in names]
+        self.assertEqual(len(set(quirks)), len(names))
+
     def test_join_code_enforced_when_configured(self):
         from moot import config
         config.JOIN_CODE = "sesame"

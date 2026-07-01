@@ -138,6 +138,12 @@ def all_aids() -> list[str]:
         return [r["aid"] for r in conn.execute("SELECT aid FROM agents")]
 
 
+def used_quirks() -> set[str]:
+    with tx() as conn:
+        return {r["quirk"] for r in conn.execute(
+            "SELECT quirk FROM agents WHERE quirk IS NOT NULL")}
+
+
 def list_agents(include_system: bool = True) -> list[dict]:
     with tx() as conn:
         q = """SELECT aid, purpose, specialty, origin, quirk, status,

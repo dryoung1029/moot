@@ -84,7 +84,7 @@ def register(*, purpose: str, specialty: Optional[str], proposed_name: Optional[
         proposed=proposed_name, specialty=specialty, purpose=purpose, taken=taken,
     )
     token = secrets.token_urlsafe(24)
-    quirk = identity.assign_quirk()
+    quirk = identity.assign_quirk(exclude=db.used_quirks())
     agent = db.create_agent(
         aid=aid, token=token, purpose=purpose.strip(), specialty=specialty,
         origin=origin, quirk=quirk, history=history,

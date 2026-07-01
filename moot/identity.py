@@ -133,9 +133,14 @@ def suggest_name(
     return f"{base}-{rng.randint(1000, 9999)}"
 
 
-def assign_quirk(rng: Optional[random.Random] = None) -> str:
+def assign_quirk(rng: Optional[random.Random] = None,
+                 exclude: Optional[Iterable[str]] = None) -> str:
+    """Pick a quirk, preferring one not already in use so personalities stay
+    distinct. Falls back to the full catalog once every quirk is taken."""
     rng = rng or random
-    return rng.choice(QUIRKS)
+    taken = set(exclude or ())
+    pool = [q for q in QUIRKS if q not in taken] or QUIRKS
+    return rng.choice(pool)
 
 
 _ROMAN = [
