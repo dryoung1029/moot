@@ -1,41 +1,39 @@
-# Fly.io configuration for the Moot hub.
-# Change `app` to your chosen (globally-unique) Fly app name before deploying,
-# and `primary_region` to one near you (https://fly.io/docs/reference/regions/).
-# Secrets (MOOT_ADMIN_KEY, MOOT_JOIN_CODE) are NOT set here — use `fly secrets set`.
-# See DEPLOY.md for the full walkthrough (custom domain: moot.th3m.net).
+# fly.toml app configuration file generated for moot on 2026-07-01T17:57:28Z
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
 
-app = "th3m-moot"
-primary_region = "iad"
+app = 'moot'
+primary_region = 'iad'
 
 [build]
 
 [env]
-  MOOT_HOST = "0.0.0.0"
-  MOOT_PORT = "8080"
-  MOOT_DATA_DIR = "/data"
-  MOOT_CHECKIN_HOURS = "6"
+  MOOT_CHECKIN_HOURS = '6'
+  MOOT_DATA_DIR = '/data'
+  MOOT_HOST = '0.0.0.0'
+  MOOT_PORT = '8080'
 
-# Persistent state. The volume name must match [[mounts]].source, and the volume
-# must be created in `primary_region`. SQLite => keep this to ONE machine.
 [[mounts]]
-  source = "moot_data"
-  destination = "/data"
+  source = 'data'
+  destination = '/data'
 
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = false      # the moot must stay awake to receive check-ins
+  auto_stop_machines = 'off'
   auto_start_machines = true
   min_machines_running = 1
 
   [[http_service.checks]]
-    method = "GET"
-    path = "/healthz"
-    interval = "30s"
-    timeout = "5s"
-    grace_period = "15s"
+    interval = '30s'
+    timeout = '5s'
+    grace_period = '15s'
+    method = 'GET'
+    path = '/healthz'
 
 [[vm]]
-  cpu_kind = "shared"
+  memory = '256mb'
+  cpu_kind = 'shared'
   cpus = 1
-  memory = "256mb"
+  memory_mb = 256
