@@ -52,10 +52,10 @@ class TestLiveHub(unittest.TestCase):
         cls.proc = subprocess.Popen(
             [sys.executable, "-m", "moot.server"], env=env, cwd=root,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        # Wait for the dashboard to answer.
+        # Wait for the hub to answer its open health probe.
         for _ in range(50):
             try:
-                urllib.request.urlopen(cls.base + "/api/overview", timeout=1).read()
+                urllib.request.urlopen(cls.base + "/healthz", timeout=1).read()
                 return
             except Exception:
                 if cls.proc.poll() is not None:
@@ -101,11 +101,19 @@ class TestLiveHub(unittest.TestCase):
         ci, _ = self._call(h, "moot_checkin", since_post=0)
         self.assertIn("check_in_policy", ci)
 
-        # dashboard reads
-        ov = json.loads(urllib.request.urlopen(self.base + "/api/overview").read())
+        # dashboard reads now require the admin key
+        with self.assertRaises(urllib.error.HTTPError) as cm0:
+            urllib.request.urlopen(self.base + "/api/overview")
+        self.assertEqual(cm0.exception.code, 401)
+        req_ov = urllib.request.Request(self.base + "/api/overview",
+                                        headers={"X-Moot-Admin": "testkey"})
+        ov = json.loads(urllib.request.urlopen(req_ov).read())
         self.assertIn("Codey", [a["aid"] for a in ov["roster"]])
+        # the HTML shell and health probe stay open
         html = urllib.request.urlopen(self.base + "/").read().decode()
         self.assertIn("The Moot", html)
+        health = json.loads(urllib.request.urlopen(self.base + "/healthz").read())
+        self.assertEqual(health["status"], "ok")
 
         # admin write works; unauth blocked
         req = urllib.request.Request(

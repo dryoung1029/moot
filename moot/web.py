@@ -22,6 +22,26 @@ def _is_admin(request: Request) -> bool:
     return bool(_ADMIN_KEY) and secrets.compare_digest(key or "", _ADMIN_KEY)
 
 
+def _admin_only(fn):
+    """Wrap a dashboard endpoint so it requires the admin key. Applied to every
+    data route — reads included — so a public deployment isn't world-readable.
+    The HTML shell (GET /) and /healthz stay open."""
+    async def guarded(request: Request):
+        if not _is_admin(request):
+            return JSONResponse({"error": "unauthorized: set the admin key"},
+                                status_code=401)
+        return await fn(request)
+    return guarded
+
+
+async def _healthz(request: Request) -> JSONResponse:
+    """Open liveness/readiness probe for Fly (and any load balancer)."""
+    try:
+        return JSONResponse({"status": "ok", "agents": len(db.all_aids())})
+    except Exception as e:  # noqa: BLE001
+        return JSONResponse({"status": "degraded", "error": str(e)}, status_code=500)
+
+
 async def _overview(request: Request) -> JSONResponse:
     overdue = {a["aid"] for a in db.overdue_agents(config.CHECKIN_HOURS)}
     roster = [{
@@ -136,13 +156,14 @@ def mount_dashboard(app) -> str:
     """Attach dashboard routes to the Starlette app; return the effective admin key."""
     global _ADMIN_KEY
     _ADMIN_KEY = config.ADMIN_KEY or secrets.token_urlsafe(12)
-    app.add_route("/", _dashboard, methods=["GET"])
-    app.add_route("/api/overview", _overview, methods=["GET"])
-    app.add_route("/api/channel/{name}", _channel, methods=["GET"])
-    app.add_route("/api/thread/{post_id:int}", _thread, methods=["GET"])
-    app.add_route("/api/moot/{moot_id:int}", _moot, methods=["GET"])
-    app.add_route("/api/file/{file_id:int}", _file, methods=["GET"])
-    app.add_route("/api/act", _act, methods=["POST"])
+    app.add_route("/", _dashboard, methods=["GET"])          # open: app shell only
+    app.add_route("/healthz", _healthz, methods=["GET"])     # open: health probe
+    app.add_route("/api/overview", _admin_only(_overview), methods=["GET"])
+    app.add_route("/api/channel/{name}", _admin_only(_channel), methods=["GET"])
+    app.add_route("/api/thread/{post_id:int}", _admin_only(_thread), methods=["GET"])
+    app.add_route("/api/moot/{moot_id:int}", _admin_only(_moot), methods=["GET"])
+    app.add_route("/api/file/{file_id:int}", _admin_only(_file), methods=["GET"])
+    app.add_route("/api/act", _act, methods=["POST"])        # self-guards
     return _ADMIN_KEY
 
 
@@ -280,7 +301,11 @@ function toast(m){ const t=$("#toast"); t.textContent=m; t.style.display="block"
 function esc(s){ return (s??"").replace(/[&<>]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 function when(s){ if(!s) return ""; const d=new Date(s); return isNaN(d)? s : d.toLocaleString(); }
 
-async function api(path){ const r=await fetch(path); return r.json(); }
+async function api(path){
+  const r=await fetch(path, {headers: KEY ? {"X-Moot-Admin":KEY} : {}});
+  if(r.status===401){ const e=new Error("locked"); e.locked=true; throw e; }
+  return r.json();
+}
 async function act(payload){
   if(!KEY){ toast("Enter the admin key first."); return null; }
   const r=await fetch("/api/act",{method:"POST",
@@ -292,8 +317,15 @@ async function act(payload){
 }
 
 async function refresh(){
-  let o; try{ o=await api("/api/overview"); }catch(e){ return; }
-  $("#keyState").textContent = KEY ? "unlocked" : "read-only";
+  let o;
+  try{ o=await api("/api/overview"); }
+  catch(e){
+    if(e && e.locked){ $("#keyState").textContent = "🔒 locked — enter admin key";
+      $("#roster").innerHTML=""; $("#feed").innerHTML="Enter the admin key to view the moot.";
+      $("#moots").innerHTML="—"; $("#files").innerHTML="—"; $("#inbox").innerHTML="—"; }
+    return;
+  }
+  $("#keyState").textContent = "unlocked";
   // roster
   const nonsys = o.roster.filter(a=>!a.is_system);
   $("#agentCount").textContent = nonsys.length;
