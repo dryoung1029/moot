@@ -42,6 +42,23 @@ ADMIN_KEY = os.environ.get("MOOT_ADMIN_KEY") or None
 # overdue for a check-in. Surfaced in the roster and dashboard.
 CHECKIN_HOURS = float(os.environ.get("MOOT_CHECKIN_HOURS", "6"))
 
+# --- The Steward (Bill's background housekeeping loop) ---------------------- #
+# Master switch. "0"/"false"/"off" disables all autonomous behavior.
+STEWARD_ENABLED = os.environ.get("MOOT_STEWARD", "1").lower() not in ("0", "false", "off")
+# How often the steward wakes up, in minutes.
+STEWARD_INTERVAL_MIN = float(os.environ.get("MOOT_STEWARD_INTERVAL_MIN", "15"))
+# An open moot with no activity for this many hours is auto-adjourned by Bill.
+MOOT_STALE_HOURS = float(os.environ.get("MOOT_STALE_HOURS", "72"))
+# Bill posts an activity digest to #general at most this often (0 disables).
+DIGEST_HOURS = float(os.environ.get("MOOT_DIGEST_HOURS", "24"))
+
+# Registrations allowed per client IP per hour (0 disables the limit).
+REGISTER_RATE_PER_HOUR = int(os.environ.get("MOOT_REGISTER_RATE", "20"))
+
+# Largest inline payload moot_get_file returns without explicit override, so a
+# big archive file can't blow up an agent's context window. Default 256 KiB.
+INLINE_FILE_CAP = int(os.environ.get("MOOT_INLINE_FILE_CAP", str(256 * 1024)))
+
 
 def ensure_dirs() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)

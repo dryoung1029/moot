@@ -36,6 +36,12 @@ def _fire(aid: str, kind: str, source_aid: Optional[str], ref: Optional[str],
             notify.dispatch(wh, {"event": "notification", **row})
 
 
+def fire(aid: str, kind: str, source_aid: Optional[str], ref: Optional[str],
+         body: str) -> None:
+    """Public entry for queue-and-push notification (used by the steward)."""
+    _fire(aid, kind, source_aid, ref, body)
+
+
 def _fire_all(kind: str, source_aid: Optional[str], ref: Optional[str],
               body: str, *, exclude: Optional[set] = None) -> int:
     exclude = exclude or set()

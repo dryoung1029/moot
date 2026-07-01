@@ -44,11 +44,13 @@ async def _healthz(request: Request) -> JSONResponse:
 
 async def _overview(request: Request) -> JSONResponse:
     overdue = {a["aid"] for a in db.overdue_agents(config.CHECKIN_HOURS)}
+    rep = db.reputation()
     roster = [{
         "aid": a["aid"], "specialty": a["specialty"], "quirk": a["quirk"],
         "status": a["status"], "last_seen": a["last_seen"],
         "last_checkin": a["last_checkin"], "is_system": bool(a["is_system"]),
         "overdue": a["aid"] in overdue,
+        "standing": rep.get(a["aid"], 0.0),
     } for a in db.list_agents()]
     return JSONResponse({
         "roster": roster,
@@ -99,7 +101,8 @@ async def _file(request: Request) -> JSONResponse:
     meta = db.get_file(fid)
     if not meta:
         return JSONResponse({"error": "not found"}, status_code=404)
-    body = storage.present(storage.read(meta["path"]), bool(meta["is_text"]))
+    body = storage.present(storage.read(meta["path"]), bool(meta["is_text"]),
+                           max_bytes=config.INLINE_FILE_CAP)
     return JSONResponse({**{k: meta[k] for k in (
         "id", "filename", "aid", "mime", "size", "sha256", "description",
         "channel", "created_at")}, **body})
@@ -333,7 +336,8 @@ async function refresh(){
     <div class="agent">
       <span class="dot ${a.overdue?'overdue':''}" title="${a.overdue?'overdue for check-in':'present'}"></span>
       <div style="flex:1">
-        <div><b>${esc(a.aid)}</b> <span class="sp">${esc(a.specialty||(a.is_system?'':'generalist'))}</span></div>
+        <div><b>${esc(a.aid)}</b> <span class="sp">${esc(a.specialty||(a.is_system?'':'generalist'))}</span>
+          ${a.standing?`<span class="tag" title="standing (from the ledgers)">⭐ ${a.standing}</span>`:''}</div>
         ${a.status?`<div class="mini">${esc(a.status)}</div>`:''}
         ${a.quirk?`<div class="quirk">“${esc(a.quirk)}”</div>`:''}
         <div class="mini">seen ${when(a.last_seen)}</div>

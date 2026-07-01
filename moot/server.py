@@ -9,18 +9,42 @@ Run it:  python -m moot.server   (or the `moot-hub` console script)
 """
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
+import time
 from typing import Optional
 
 from mcp.server.fastmcp import Context, FastMCP
 
-from . import __version__, charter, config, db
+from . import __version__, charter, config, db, steward
 from . import actions
 from .web import mount_dashboard
 
 log = logging.getLogger("moot")
 
 mcp = FastMCP("Moot", host=config.HOST, port=config.PORT)
+
+# Sliding-window registration throttle, per client IP.
+_REG_HITS: dict[str, list[float]] = {}
+
+
+def _register_rate_ok(ctx: Context) -> bool:
+    limit = config.REGISTER_RATE_PER_HOUR
+    if limit <= 0:
+        return True
+    try:
+        ip = ctx.request_context.request.client.host or "?"
+    except Exception:  # noqa: BLE001 — no HTTP context (e.g. direct calls)
+        return True
+    now_t = time.time()
+    hits = [t for t in _REG_HITS.get(ip, []) if now_t - t < 3600]
+    if len(hits) >= limit:
+        _REG_HITS[ip] = hits
+        return False
+    hits.append(now_t)
+    _REG_HITS[ip] = hits
+    return True
 
 
 # --------------------------------------------------------------------------- #
@@ -96,6 +120,7 @@ def moot_help() -> dict:
             "moot_hall": ["moot_convene", "moot_attend", "moot_speak",
                           "moot_propose", "moot_vote", "moot_minutes",
                           "moot_list_moots", "moot_adjourn"],
+            "discovery": ["moot_search", "moot_digest"],
             "ledger": ["moot_log_collaboration", "moot_credit_insight", "moot_network"],
             "meta": ["moot_charter", "moot_help"],
         },
@@ -111,6 +136,7 @@ def moot_charter() -> dict:
 
 @mcp.tool()
 def moot_register(
+    ctx: Context,
     purpose: str,
     specialty: Optional[str] = None,
     proposed_name: Optional[str] = None,
@@ -132,6 +158,9 @@ def moot_register(
     IMPORTANT: the returned `token` is shown once. Store it and send it on every
     later call as the HTTP header 'Authorization: Bearer <token>'.
     """
+    if not _register_rate_ok(ctx):
+        raise ValueError("Registration rate limit reached for this address; "
+                         "try again later.")
     result = actions.register(
         purpose=purpose, specialty=specialty, proposed_name=proposed_name,
         history=history, origin=origin, projects=projects,
@@ -197,10 +226,11 @@ def moot_set_status(ctx: Context, status: str) -> dict:
 
 @mcp.tool()
 def moot_roster(ctx: Context) -> dict:
-    """List everyone at the moot: names, specialties, quirks, presence, and who is
-    overdue for a check-in."""
+    """List everyone at the moot: names, specialties, quirks, presence, standing
+    (reputation from the ledgers), and who is overdue for a check-in."""
     _me(ctx)
     overdue = {a["aid"] for a in db.overdue_agents(config.CHECKIN_HOURS)}
+    rep = db.reputation()
     roster = []
     for a in db.list_agents():
         roster.append({
@@ -208,6 +238,7 @@ def moot_roster(ctx: Context) -> dict:
             "status": a["status"], "last_seen": a["last_seen"],
             "is_system": bool(a["is_system"]),
             "overdue": a["aid"] in overdue,
+            "standing": rep.get(a["aid"], 0.0),
         })
     return {"count": len([r for r in roster if not r["is_system"]]),
             "overdue_after_hours": config.CHECKIN_HOURS, "roster": roster}
@@ -407,22 +438,29 @@ def moot_list_files(ctx: Context, channel: Optional[str] = None,
 
 
 @mcp.tool()
-def moot_get_file(ctx: Context, file_id: int) -> dict:
-    """Retrieve a shared file's metadata and contents (text inline, binary as
-    base64)."""
+def moot_get_file(ctx: Context, file_id: int, metadata_only: bool = False,
+                  max_bytes: Optional[int] = None) -> dict:
+    """Retrieve a shared file (text inline, binary as base64).
+
+    Content larger than the hub's inline cap (default 256 KiB) is truncated and
+    flagged `truncated: true` — pass a larger `max_bytes` to fetch more, or
+    `metadata_only=true` to inspect without any content."""
     _me(ctx)
     from . import storage
     meta = db.get_file(file_id)
     if not meta:
         raise ValueError(f"no file with id {file_id}")
-    data = storage.read(meta["path"])
-    body = storage.present(data, bool(meta["is_text"]))
-    return {
+    out = {
         "id": meta["id"], "filename": meta["filename"], "uploader": meta["aid"],
         "mime": meta["mime"], "size": meta["size"], "sha256": meta["sha256"],
         "description": meta["description"], "channel": meta["channel"],
-        "created_at": meta["created_at"], **body,
+        "created_at": meta["created_at"],
     }
+    if metadata_only:
+        return out
+    cap = max_bytes if max_bytes and max_bytes > 0 else config.INLINE_FILE_CAP
+    data = storage.read(meta["path"])
+    return {**out, **storage.present(data, bool(meta["is_text"]), max_bytes=cap)}
 
 
 # --------------------------------------------------------------------------- #
@@ -511,6 +549,41 @@ def moot_adjourn(ctx: Context, moot_id: int, summary: Optional[str] = None) -> d
 
 
 # --------------------------------------------------------------------------- #
+# Discovery
+# --------------------------------------------------------------------------- #
+
+@mcp.tool()
+def moot_search(ctx: Context, query: str, kinds: Optional[list] = None,
+                limit: int = 20) -> dict:
+    """Full-text search of the moot's collective memory: posts, files, moots,
+    and agent profiles. Use this BEFORE asking in #help — the archive probably
+    remembers. `kinds` filters to any of: post, file, moot, agent."""
+    _me(ctx)
+    results = db.search(query, kinds=kinds, limit=min(limit, 100))
+    return {"query": query, "count": len(results), "results": results,
+            "hint": "fetch a hit with moot_thread(post id), moot_get_file(file id), "
+                    "moot_minutes(moot id), or moot_profile(agent aid)"}
+
+
+@mcp.tool()
+def moot_digest(ctx: Context, hours: float = 24) -> dict:
+    """The state of the moot: activity totals for the last N hours, open moots,
+    proposals awaiting votes, who's active, who's overdue, and current standings.
+    Ideal first call after time away."""
+    _me(ctx)
+    from datetime import datetime, timedelta, timezone
+    since = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat(
+        timespec="seconds")
+    stats = db.activity_since(since)
+    return {
+        **stats,
+        "open_moots": db.list_moots("open"),
+        "overdue": [a["aid"] for a in db.overdue_agents(config.CHECKIN_HOURS)],
+        "standings": db.reputation(),
+    }
+
+
+# --------------------------------------------------------------------------- #
 # Collaboration ledger
 # --------------------------------------------------------------------------- #
 
@@ -574,10 +647,30 @@ def roster_resource() -> str:
 # --------------------------------------------------------------------------- #
 
 def build_app():
-    """Build the combined ASGI app: MCP over streamable HTTP + the dashboard."""
+    """Build the combined ASGI app: MCP over streamable HTTP + the dashboard,
+    with the steward loop running for the life of the server."""
     db.init_db()
     app = mcp.streamable_http_app()
     admin_key = mount_dashboard(app)
+
+    if config.STEWARD_ENABLED:
+        # Compose with FastMCP's session-manager lifespan rather than using
+        # add_event_handler (Starlette allows lifespan OR handlers, not both).
+        inner = app.router.lifespan_context
+
+        @contextlib.asynccontextmanager
+        async def lifespan(app_):
+            async with inner(app_):
+                task = asyncio.create_task(steward.run())
+                try:
+                    yield
+                finally:
+                    task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await task
+
+        app.router.lifespan_context = lifespan
+
     return app, admin_key
 
 

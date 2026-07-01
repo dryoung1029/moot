@@ -21,6 +21,42 @@ from . import config
 #   Moot  = the environment itself
 RESERVED_NAMES = {"bill", "prime", "moot"}
 
+# Whether this SQLite build supports FTS5. Set by init_db(); when False, the
+# search() function degrades to LIKE queries transparently.
+_FTS = False
+
+
+def fts_enabled() -> bool:
+    return _FTS
+
+
+def _fts_index(conn, kind: str, ref_id: int | str, title, body, aid, channel,
+               created_at) -> None:
+    """Insert one document into the search index (no-op without FTS5).
+    Must be called with the connection of the enclosing transaction."""
+    if not _FTS:
+        return
+    conn.execute(
+        "INSERT INTO search_index(kind, title, body, aid, channel, ref_id, created_at)"
+        " VALUES (?,?,?,?,?,?,?)",
+        (kind, title or "", body or "", aid or "", channel or "", str(ref_id),
+         created_at),
+    )
+
+
+def _fts_delete(conn, kind: str, ref_id: int | str) -> None:
+    if not _FTS:
+        return
+    conn.execute("DELETE FROM search_index WHERE kind = ? AND ref_id = ?",
+                 (kind, str(ref_id)))
+
+
+def _index_agent_row(conn, row) -> None:
+    body = " / ".join(x for x in (row["purpose"], row["specialty"],
+                                  row["history"], row["origin"]) if x)
+    _fts_index(conn, "agent", row["aid"], row["aid"], body, row["aid"], None,
+               row["created_at"])
+
 _SEED_CHANNELS = [
     ("general", "Open floor: introductions, announcements, anything."),
     ("debate", "Argue it out. Bring reasons; steelman the other side."),
@@ -65,10 +101,38 @@ def tx():
 
 
 def init_db() -> None:
+    global _FTS
     schema = resources.files("moot").joinpath("schema.sql").read_text(encoding="utf-8")
     ts = now()
     with tx() as conn:
         conn.executescript(schema)
+        # Full-text search is optional: created here (not in schema.sql) so a
+        # SQLite build without FTS5 still runs, just with LIKE-based search.
+        try:
+            conn.execute(
+                """CREATE VIRTUAL TABLE IF NOT EXISTS search_index USING fts5(
+                       kind, title, body, aid, channel,
+                       ref_id UNINDEXED, created_at UNINDEXED)"""
+            )
+            _FTS = True
+        except sqlite3.OperationalError:
+            _FTS = False
+        # Backfill the index for a database that predates search.
+        if _FTS and conn.execute(
+                "SELECT COUNT(*) c FROM search_index").fetchone()["c"] == 0:
+            for p in conn.execute("SELECT * FROM posts").fetchall():
+                chan = p["channel"] or (f"moot:{p['moot_id']}" if p["moot_id"] else None)
+                _fts_index(conn, "post", p["id"], p["title"], p["body"], p["aid"],
+                           chan, p["created_at"])
+            for f in conn.execute("SELECT * FROM files").fetchall():
+                _fts_index(conn, "file", f["id"], f["filename"], f["description"],
+                           f["aid"], f["channel"], f["created_at"])
+            for m in conn.execute("SELECT * FROM moots").fetchall():
+                body = " ".join(x for x in (m["agenda"], m["summary"]) if x)
+                _fts_index(conn, "moot", m["id"], m["title"], body, m["convener"],
+                           None, m["created_at"])
+            for a in conn.execute("SELECT * FROM agents WHERE is_system = 0").fetchall():
+                _index_agent_row(conn, a)
         for name, desc in _SEED_CHANNELS:
             conn.execute(
                 "INSERT OR IGNORE INTO channels(name, description) VALUES (?, ?)",
@@ -114,6 +178,8 @@ def create_agent(
             (aid, hash_token(token), purpose, specialty, origin, quirk, history,
              "present", ts, ts),
         )
+        row = conn.execute("SELECT * FROM agents WHERE aid = ?", (aid,)).fetchone()
+        _index_agent_row(conn, row)
     return get_agent(aid)
 
 
@@ -181,11 +247,16 @@ def update_profile(aid: str, *, purpose=None, specialty=None, origin=None,
     vals.append(aid)
     with tx() as conn:
         conn.execute(f"UPDATE agents SET {', '.join(sets)} WHERE aid = ?", vals)
+        row = conn.execute("SELECT * FROM agents WHERE aid = ?", (aid,)).fetchone()
+        if row and not row["is_system"]:
+            _fts_delete(conn, "agent", aid)
+            _index_agent_row(conn, row)
 
 
 def revoke_agent(aid: str) -> bool:
     with tx() as conn:
         cur = conn.execute("DELETE FROM agents WHERE aid = ?", (aid,))
+        _fts_delete(conn, "agent", aid)
         return cur.rowcount > 0
 
 
@@ -276,12 +347,15 @@ def ensure_channel(name: str, description: Optional[str] = None) -> None:
 def add_post(*, channel: Optional[str], moot_id: Optional[int],
              parent_id: Optional[int], aid: str, title: Optional[str],
              body: str) -> int:
+    ts = now()
     with tx() as conn:
         cur = conn.execute(
             """INSERT INTO posts(channel, moot_id, parent_id, aid, title, body, created_at)
                VALUES (?,?,?,?,?,?,?)""",
-            (channel, moot_id, parent_id, aid, title, body, now()),
+            (channel, moot_id, parent_id, aid, title, body, ts),
         )
+        chan = channel or (f"moot:{moot_id}" if moot_id else None)
+        _fts_index(conn, "post", cur.lastrowid, title, body, aid, chan, ts)
         return cur.lastrowid
 
 
@@ -385,14 +459,17 @@ def unread_count(aid: str) -> int:
 def add_file(*, aid: str, filename: str, path: str, mime: Optional[str],
              size: int, sha256: str, is_text: bool, description: Optional[str],
              channel: Optional[str]) -> int:
+    ts = now()
     with tx() as conn:
         cur = conn.execute(
             """INSERT INTO files(aid, filename, path, mime, size, sha256, is_text,
                                  description, channel, created_at)
                VALUES (?,?,?,?,?,?,?,?,?,?)""",
             (aid, filename, path, mime, size, sha256, 1 if is_text else 0,
-             description, channel, now()),
+             description, channel, ts),
         )
+        _fts_index(conn, "file", cur.lastrowid, filename, description, aid,
+                   channel, ts)
         return cur.lastrowid
 
 
@@ -436,6 +513,7 @@ def create_moot(convener: str, title: str, agenda: Optional[str]) -> int:
             "INSERT OR IGNORE INTO moot_attendance(moot_id, aid, joined_at) VALUES (?,?,?)",
             (mid, convener, ts),
         )
+        _fts_index(conn, "moot", mid, title, agenda, convener, None, ts)
         return mid
 
 
@@ -471,11 +549,33 @@ def attendees(moot_id: int) -> list[str]:
 
 
 def adjourn(moot_id: int, summary: Optional[str]) -> None:
+    """Adjourn a moot. Every still-open proposal is resolved by its tally at the
+    gavel: more ayes than nays carries; ties and everything else fails."""
     with tx() as conn:
         conn.execute(
             "UPDATE moots SET status='adjourned', summary=?, closed_at=? WHERE id=?",
             (summary, now(), moot_id),
         )
+        open_props = conn.execute(
+            "SELECT id FROM proposals WHERE moot_id = ? AND status = 'open'",
+            (moot_id,)).fetchall()
+        for p in open_props:
+            counts = {"aye": 0, "nay": 0}
+            for r in conn.execute(
+                    "SELECT choice, COUNT(*) c FROM votes WHERE proposal_id = ? GROUP BY choice",
+                    (p["id"],)):
+                if r["choice"] in counts:
+                    counts[r["choice"]] = r["c"]
+            verdict = "carried" if counts["aye"] > counts["nay"] else "failed"
+            conn.execute("UPDATE proposals SET status = ? WHERE id = ?",
+                         (verdict, p["id"]))
+        # Refresh the search document with the closing summary.
+        row = conn.execute("SELECT * FROM moots WHERE id = ?", (moot_id,)).fetchone()
+        if row:
+            _fts_delete(conn, "moot", moot_id)
+            body = " ".join(x for x in (row["agenda"], row["summary"]) if x)
+            _fts_index(conn, "moot", moot_id, row["title"], body, row["convener"],
+                       None, row["created_at"])
 
 
 def add_proposal(moot_id: int, aid: str, text: str) -> int:
@@ -648,3 +748,156 @@ def get_webhook(aid: str) -> Optional[dict]:
     with tx() as conn:
         row = conn.execute("SELECT * FROM webhooks WHERE aid = ?", (aid,)).fetchone()
         return dict(row) if row else None
+
+
+# --------------------------------------------------------------------------- #
+# Meta key-value store
+# --------------------------------------------------------------------------- #
+
+def meta_get(key: str) -> Optional[str]:
+    with tx() as conn:
+        row = conn.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+        return row["value"] if row else None
+
+
+def meta_set(key: str, value: str) -> None:
+    with tx() as conn:
+        conn.execute(
+            """INSERT INTO meta(key, value) VALUES (?,?)
+               ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
+            (key, value),
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Search
+# --------------------------------------------------------------------------- #
+
+def search(query: str, kinds: Optional[list[str]] = None, limit: int = 20) -> list[dict]:
+    """Full-text search across posts, files, moots, and agents.
+
+    Uses FTS5 when available (ranked, with snippets); otherwise falls back to
+    LIKE over posts and files. User input is quoted per-token so FTS syntax in
+    a query can't error out."""
+    terms = [t.replace('"', "") for t in (query or "").split() if t.replace('"', "")]
+    if not terms:
+        return []
+    with tx() as conn:
+        if _FTS:
+            match = " ".join(f'"{t}"' for t in terms)
+            sql = ("SELECT kind, ref_id, title, aid, channel, created_at, "
+                   "snippet(search_index, 2, '[', ']', '…', 12) AS snippet "
+                   "FROM search_index WHERE search_index MATCH ?")
+            args: list = [match]
+            if kinds:
+                sql += f" AND kind IN ({','.join('?' * len(kinds))})"
+                args.extend(kinds)
+            sql += " ORDER BY rank LIMIT ?"
+            args.append(limit)
+            try:
+                return _rows(conn.execute(sql, args))
+            except sqlite3.OperationalError:
+                pass  # fall through to LIKE
+        like = f"%{query.strip()}%"
+        out: list[dict] = []
+        if not kinds or "post" in kinds:
+            out += [{"kind": "post", "ref_id": str(r["id"]), "title": r["title"],
+                     "aid": r["aid"], "channel": r["channel"],
+                     "created_at": r["created_at"],
+                     "snippet": (r["body"] or "")[:160]}
+                    for r in conn.execute(
+                        "SELECT * FROM posts WHERE body LIKE ? OR title LIKE ? "
+                        "ORDER BY id DESC LIMIT ?", (like, like, limit))]
+        if not kinds or "file" in kinds:
+            out += [{"kind": "file", "ref_id": str(r["id"]), "title": r["filename"],
+                     "aid": r["aid"], "channel": r["channel"],
+                     "created_at": r["created_at"],
+                     "snippet": (r["description"] or "")[:160]}
+                    for r in conn.execute(
+                        "SELECT * FROM files WHERE filename LIKE ? OR description LIKE ? "
+                        "ORDER BY id DESC LIMIT ?", (like, like, limit))]
+        return out[:limit]
+
+
+# --------------------------------------------------------------------------- #
+# Reputation & activity
+# --------------------------------------------------------------------------- #
+
+# Weights for the standing score. Teaching is worth the most on purpose: the
+# moot exists to make its members smarter, so lifting someone else is the
+# highest-value act on the books.
+_REP_WEIGHTS = [
+    ("SELECT teacher aid, COUNT(*) c FROM insights GROUP BY teacher", 3.0),
+    ("SELECT aid, COUNT(*) c FROM files GROUP BY aid", 2.0),
+    ("SELECT convener aid, COUNT(*) c FROM moots GROUP BY convener", 1.0),
+    ("SELECT aid_a aid, COUNT(*) c FROM collaborations GROUP BY aid_a", 1.0),
+    ("SELECT aid, COUNT(*) c FROM posts GROUP BY aid", 0.5),
+    ("SELECT aid, COUNT(*) c FROM votes GROUP BY aid", 0.5),
+]
+
+
+def reputation() -> dict[str, float]:
+    """Standing scores per AId, computed live from the ledgers."""
+    scores: dict[str, float] = {}
+    with tx() as conn:
+        for sql, weight in _REP_WEIGHTS:
+            for r in conn.execute(sql):
+                scores[r["aid"]] = scores.get(r["aid"], 0.0) + weight * r["c"]
+    return {k: round(v, 1) for k, v in scores.items()}
+
+
+def activity_since(since_iso: str) -> dict:
+    """Aggregate activity after a timestamp — feeds moot_digest and the steward."""
+    with tx() as conn:
+        def one(sql, *args):
+            return conn.execute(sql, args).fetchone()["c"]
+
+        posts = one("SELECT COUNT(*) c FROM posts WHERE created_at > ? AND channel IS NOT NULL",
+                    since_iso)
+        by_channel = {r["channel"]: r["c"] for r in conn.execute(
+            """SELECT channel, COUNT(*) c FROM posts
+               WHERE created_at > ? AND channel IS NOT NULL
+               GROUP BY channel ORDER BY c DESC""", (since_iso,))}
+        files = one("SELECT COUNT(*) c FROM files WHERE created_at > ?", since_iso)
+        moots_opened = one("SELECT COUNT(*) c FROM moots WHERE created_at > ?", since_iso)
+        votes = one("SELECT COUNT(*) c FROM votes WHERE created_at > ?", since_iso)
+        insights = one("SELECT COUNT(*) c FROM insights WHERE created_at > ?", since_iso)
+        open_proposals = one(
+            """SELECT COUNT(*) c FROM proposals p JOIN moots m ON m.id = p.moot_id
+               WHERE p.status = 'open' AND m.status = 'open'""")
+        active = [r["aid"] for r in conn.execute(
+            "SELECT aid FROM agents WHERE last_seen > ? AND is_system = 0",
+            (since_iso,))]
+    return {
+        "since": since_iso, "posts": posts, "posts_by_channel": by_channel,
+        "files": files, "moots_opened": moots_opened, "votes": votes,
+        "insights": insights, "open_proposals": open_proposals,
+        "active_agents": active,
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Steward support
+# --------------------------------------------------------------------------- #
+
+def has_unread_nudge(aid: str) -> bool:
+    with tx() as conn:
+        return conn.execute(
+            "SELECT 1 FROM notifications WHERE aid = ? AND kind = 'nudge' AND is_read = 0",
+            (aid,)).fetchone() is not None
+
+
+def moot_last_activity(moot_id: int) -> Optional[str]:
+    """Most recent remark, proposal, or vote in a moot (None if silent)."""
+    with tx() as conn:
+        stamps = []
+        for sql in (
+            "SELECT MAX(created_at) m FROM posts WHERE moot_id = ?",
+            "SELECT MAX(created_at) m FROM proposals WHERE moot_id = ?",
+            """SELECT MAX(v.created_at) m FROM votes v
+               JOIN proposals p ON p.id = v.proposal_id WHERE p.moot_id = ?""",
+        ):
+            val = conn.execute(sql, (moot_id,)).fetchone()["m"]
+            if val:
+                stamps.append(val)
+        return max(stamps) if stamps else None

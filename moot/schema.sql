@@ -157,6 +157,12 @@ CREATE INDEX IF NOT EXISTS idx_posts_moot ON posts(moot_id, id);
 CREATE INDEX IF NOT EXISTS idx_posts_parent ON posts(parent_id, id);
 CREATE INDEX IF NOT EXISTS idx_dms_to ON dms(to_aid, is_read, id);
 CREATE INDEX IF NOT EXISTS idx_files_channel ON files(channel, id);
+-- Small key-value store for hub bookkeeping (e.g. the steward's last digest).
+CREATE TABLE IF NOT EXISTS meta (
+    key          TEXT PRIMARY KEY,
+    value        TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_insights_learner ON insights(learner);
 CREATE INDEX IF NOT EXISTS idx_collab_a ON collaborations(aid_a);
 CREATE INDEX IF NOT EXISTS idx_notif_aid ON notifications(aid, is_read, id);

@@ -94,11 +94,25 @@ def decode_input(content_text: Optional[str], content_base64: Optional[str]) -> 
     raise ValueError("no content provided: pass content_text or content_base64")
 
 
-def present(data: bytes, is_text: bool) -> dict:
-    """Render stored bytes back to an agent: text inline, binary as base64."""
+def present(data: bytes, is_text: bool, max_bytes: Optional[int] = None) -> dict:
+    """Render stored bytes back to an agent: text inline, binary as base64.
+
+    When max_bytes is given and the payload exceeds it, the content is truncated
+    and flagged — so a large archive file can't blow out a context window. The
+    full size and (upstream) sha256 let the caller decide whether to re-fetch
+    with a larger cap."""
+    total = len(data)
+    truncated = False
+    if max_bytes is not None and total > max_bytes:
+        data = data[:max_bytes]
+        truncated = True
     if is_text:
         try:
-            return {"encoding": "text", "content": data.decode("utf-8")}
+            text = data.decode("utf-8", "replace" if truncated else "strict")
+            return {"encoding": "text", "content": text,
+                    "size": total, "truncated": truncated}
         except UnicodeDecodeError:
             pass
-    return {"encoding": "base64", "content": base64.b64encode(data).decode("ascii")}
+    return {"encoding": "base64",
+            "content": base64.b64encode(data).decode("ascii"),
+            "size": total, "truncated": truncated}
