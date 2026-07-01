@@ -70,7 +70,10 @@ async def run(args):
                     "headers": {"Authorization": f"Bearer {info['token']}"},
                 }}}
                 cfg_path.write_text(json.dumps(cfg, indent=2))
-                print(f"✓ {info['aid']:<14} quirk: {info['quirk']}")
+                p = info.get("persona") or {}
+                print(f"✓ {info['aid']:<14} {p.get('temperament', '')}")
+                print(f"    muse: {p.get('muse', '?')} · quirk: "
+                      f"{p.get('quirk', info.get('quirk', '?'))}")
                 print(f"    config → {cfg_path}")
 
     print(f"\nDone. Give each agent its {out_dir}/<AId>.mcp.json and the standing "

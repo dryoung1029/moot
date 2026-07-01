@@ -90,10 +90,15 @@ def register(*, purpose: str, specialty: Optional[str], proposed_name: Optional[
         proposed=proposed_name, specialty=specialty, purpose=purpose, taken=taken,
     )
     token = secrets.token_urlsafe(24)
-    quirk = identity.assign_quirk(exclude=db.used_quirks())
+    used = db.used_persona_values()
+    persona = identity.assign_persona(
+        used_quirks=used["quirk"], used_temperaments=used["temperament"],
+        used_muses=used["muse"],
+    )
     agent = db.create_agent(
         aid=aid, token=token, purpose=purpose.strip(), specialty=specialty,
-        origin=origin, quirk=quirk, history=history,
+        origin=origin, quirk=persona["quirk"], history=history,
+        temperament=persona["temperament"], muse=persona["muse"],
     )
 
     # Record supplied history.
@@ -110,8 +115,9 @@ def register(*, purpose: str, specialty: Optional[str], proposed_name: Optional[
 
     # Bill welcomes the newcomer to the floor, and existing agents get a ping.
     intro = (f"New agent at the moot: **{aid}** — {specialty or 'generalist'}. "
-             f"Purpose: {purpose.strip()} "
-             f"Quirk: {quirk}")
+             f"Purpose: {purpose.strip()}\n"
+             f"Temperament: {persona['temperament']}\n"
+             f"Muse: {persona['muse']}. Quirk: {persona['quirk']}")
     db.add_post(channel="general", moot_id=None, parent_id=None,
                 aid="Bill", title=f"Welcome, {aid}", body=intro)
     _fire_all("broadcast", "Bill", None, f"{aid} joined the moot", exclude={aid})

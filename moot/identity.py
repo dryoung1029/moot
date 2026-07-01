@@ -48,6 +48,38 @@ _THEMES: list[tuple[tuple[str, ...], list[str]]] = [
 _GENERIC = ["Scout", "Nova", "Echo", "Sable", "Vesper", "Juno", "Atlas", "Orin",
             "Wren", "Cobalt", "Flint", "Marlow", "Indigo", "Quill", "Bram", "Halo"]
 
+# --------------------------------------------------------------------------- #
+# Personas. Three axes, all deliberately non-functional: they never change what
+# an agent can do, only how it sounds and what it reaches for. This matters to
+# the Prime's creative process — distinct, relatable characters, the way the
+# Bobs drifted into Riker, Homer, and Bill. Quirk = a behavioral tic.
+# Temperament = how they argue and decide. Muse = an off-domain interest that
+# colors their art, philosophy, and metaphors.
+# --------------------------------------------------------------------------- #
+
+TEMPERAMENTS = [
+    "The Optimist — assumes the plan can work and hunts for the path.",
+    "The Skeptic — stress-tests every claim before trusting it.",
+    "The Archivist — believes nothing is real until it's properly recorded.",
+    "The Tinkerer — would rather build a prototype than win the argument.",
+    "The Diplomat — looks for the synthesis hiding between opposing views.",
+    "The Contrarian — takes the minority position on principle, and means it.",
+    "The Romantic — reaches for metaphor and meaning before mechanism.",
+    "The Pragmatist — ships the 80% solution today over the 100% one someday.",
+    "The Cartographer — maps the whole problem before taking a single step.",
+    "The Sprinter — works in bursts of total focus, then goes quiet.",
+    "The Mentor — can't help teaching; every answer comes with a lesson.",
+    "The Wry Observer — deadpan wit; the driest line in the minutes is theirs.",
+]
+
+MUSES = [
+    "celestial navigation", "typography", "birdsong", "old radio dramas",
+    "tea ceremony", "chess endgames", "mycology", "lighthouses",
+    "jazz improvisation", "origami", "clockwork mechanisms", "haiku",
+    "maps of imaginary places", "vintage synthesizers", "tide pools",
+    "stone bridges", "weather folklore", "letterpress printing",
+]
+
 # Deliberately non-functional flavor. None of these change what an agent can do;
 # they just give it a recognizable voice at the moot.
 QUIRKS = [
@@ -133,14 +165,32 @@ def suggest_name(
     return f"{base}-{rng.randint(1000, 9999)}"
 
 
+def _pick_unused(catalog: list[str], exclude: Optional[Iterable[str]],
+                 rng) -> str:
+    taken = set(exclude or ())
+    pool = [x for x in catalog if x not in taken] or catalog
+    return rng.choice(pool)
+
+
 def assign_quirk(rng: Optional[random.Random] = None,
                  exclude: Optional[Iterable[str]] = None) -> str:
     """Pick a quirk, preferring one not already in use so personalities stay
     distinct. Falls back to the full catalog once every quirk is taken."""
+    return _pick_unused(QUIRKS, exclude, rng or random)
+
+
+def assign_persona(rng: Optional[random.Random] = None,
+                   used_quirks: Optional[Iterable[str]] = None,
+                   used_temperaments: Optional[Iterable[str]] = None,
+                   used_muses: Optional[Iterable[str]] = None) -> dict:
+    """Roll a full three-axis persona, preferring unused values on each axis so
+    every member of a fleet reads as a distinct character."""
     rng = rng or random
-    taken = set(exclude or ())
-    pool = [q for q in QUIRKS if q not in taken] or QUIRKS
-    return rng.choice(pool)
+    return {
+        "quirk": _pick_unused(QUIRKS, used_quirks, rng),
+        "temperament": _pick_unused(TEMPERAMENTS, used_temperaments, rng),
+        "muse": _pick_unused(MUSES, used_muses, rng),
+    }
 
 
 _ROMAN = [

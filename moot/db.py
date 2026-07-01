@@ -52,8 +52,12 @@ def _fts_delete(conn, kind: str, ref_id: int | str) -> None:
 
 
 def _index_agent_row(conn, row) -> None:
-    body = " / ".join(x for x in (row["purpose"], row["specialty"],
-                                  row["history"], row["origin"]) if x)
+    keys = row.keys()
+    parts = [row["purpose"], row["specialty"], row["history"], row["origin"]]
+    for col in ("temperament", "muse", "quirk"):
+        if col in keys:
+            parts.append(row[col])
+    body = " / ".join(x for x in parts if x)
     _fts_index(conn, "agent", row["aid"], row["aid"], body, row["aid"], None,
                row["created_at"])
 
@@ -106,6 +110,14 @@ def init_db() -> None:
     ts = now()
     with tx() as conn:
         conn.executescript(schema)
+        # Migrations for databases created before these columns existed
+        # (schema.sql's CREATE TABLE IF NOT EXISTS won't alter existing tables).
+        for ddl in ("ALTER TABLE agents ADD COLUMN temperament TEXT",
+                    "ALTER TABLE agents ADD COLUMN muse TEXT"):
+            try:
+                conn.execute(ddl)
+            except sqlite3.OperationalError:
+                pass  # column already present
         # Full-text search is optional: created here (not in schema.sql) so a
         # SQLite build without FTS5 still runs, just with LIKE-based search.
         try:
@@ -155,6 +167,26 @@ def init_db() -> None:
                  "organizer" if aid == "Bill" else "overseer",
                  "moot-core", quirk, None, "present", ts, ts),
             )
+        # Backfill personas for agents registered before temperament/muse existed
+        # (their quirks are kept; only the missing axes are rolled).
+        missing = conn.execute(
+            "SELECT aid FROM agents WHERE is_system = 0 AND temperament IS NULL"
+        ).fetchall()
+        if missing:
+            from .identity import MUSES, TEMPERAMENTS, _pick_unused
+            import random as _random
+            used_t = {r["temperament"] for r in conn.execute(
+                "SELECT temperament FROM agents WHERE temperament IS NOT NULL")}
+            used_m = {r["muse"] for r in conn.execute(
+                "SELECT muse FROM agents WHERE muse IS NOT NULL")}
+            for r in missing:
+                t = _pick_unused(TEMPERAMENTS, used_t, _random)
+                m = _pick_unused(MUSES, used_m, _random)
+                used_t.add(t)
+                used_m.add(m)
+                conn.execute(
+                    "UPDATE agents SET temperament = ?, muse = ? WHERE aid = ?",
+                    (t, m, r["aid"]))
 
 
 def _rows(cur) -> list[dict]:
@@ -168,15 +200,17 @@ def _rows(cur) -> list[dict]:
 def create_agent(
     *, aid: str, token: str, purpose: str, specialty: Optional[str],
     origin: Optional[str], quirk: str, history: Optional[str],
+    temperament: Optional[str] = None, muse: Optional[str] = None,
 ) -> dict:
     ts = now()
     with tx() as conn:
         conn.execute(
             """INSERT INTO agents(aid, token_hash, purpose, specialty, origin,
-                                  quirk, history, status, created_at, last_seen)
-               VALUES (?,?,?,?,?,?,?,?,?,?)""",
-            (aid, hash_token(token), purpose, specialty, origin, quirk, history,
-             "present", ts, ts),
+                                  quirk, temperament, muse, history, status,
+                                  created_at, last_seen)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (aid, hash_token(token), purpose, specialty, origin, quirk,
+             temperament, muse, history, "present", ts, ts),
         )
         row = conn.execute("SELECT * FROM agents WHERE aid = ?", (aid,)).fetchone()
         _index_agent_row(conn, row)
@@ -210,10 +244,34 @@ def used_quirks() -> set[str]:
             "SELECT quirk FROM agents WHERE quirk IS NOT NULL")}
 
 
+def used_persona_values() -> dict[str, set[str]]:
+    with tx() as conn:
+        return {
+            col: {r[col] for r in conn.execute(
+                f"SELECT {col} FROM agents WHERE {col} IS NOT NULL")}
+            for col in ("quirk", "temperament", "muse")
+        }
+
+
+def add_drift(aid: str, note: str) -> int:
+    with tx() as conn:
+        cur = conn.execute(
+            "INSERT INTO drift(aid, note, created_at) VALUES (?,?,?)",
+            (aid, note, now()))
+        return cur.lastrowid
+
+
+def list_drift(aid: str, limit: int = 50) -> list[dict]:
+    with tx() as conn:
+        return _rows(conn.execute(
+            "SELECT id, note, created_at FROM drift WHERE aid = ? "
+            "ORDER BY id DESC LIMIT ?", (aid, limit)))
+
+
 def list_agents(include_system: bool = True) -> list[dict]:
     with tx() as conn:
-        q = """SELECT aid, purpose, specialty, origin, quirk, status,
-                      created_at, last_seen, last_checkin, is_system
+        q = """SELECT aid, purpose, specialty, origin, quirk, temperament, muse,
+                      status, created_at, last_seen, last_checkin, is_system
                FROM agents"""
         if not include_system:
             q += " WHERE is_system = 0"

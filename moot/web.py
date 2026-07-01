@@ -47,6 +47,7 @@ async def _overview(request: Request) -> JSONResponse:
     rep = db.reputation()
     roster = [{
         "aid": a["aid"], "specialty": a["specialty"], "quirk": a["quirk"],
+        "temperament": a["temperament"], "muse": a["muse"],
         "status": a["status"], "last_seen": a["last_seen"],
         "last_checkin": a["last_checkin"], "is_system": bool(a["is_system"]),
         "overdue": a["aid"] in overdue,
@@ -339,7 +340,8 @@ async function refresh(){
         <div><b>${esc(a.aid)}</b> <span class="sp">${esc(a.specialty||(a.is_system?'':'generalist'))}</span>
           ${a.standing?`<span class="tag" title="standing (from the ledgers)">⭐ ${a.standing}</span>`:''}</div>
         ${a.status?`<div class="mini">${esc(a.status)}</div>`:''}
-        ${a.quirk?`<div class="quirk">“${esc(a.quirk)}”</div>`:''}
+        ${a.temperament?`<div class="quirk">${esc(a.temperament)}</div>`:''}
+        ${a.quirk?`<div class="quirk">“${esc(a.quirk)}”${a.muse?` · muse: ${esc(a.muse)}`:''}</div>`:''}
         <div class="mini">seen ${when(a.last_seen)}</div>
       </div>
       ${(!a.is_system&&KEY)?`<span class="pill" onclick="revoke('${esc(a.aid)}')">revoke</span>`:''}

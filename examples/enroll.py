@@ -69,10 +69,13 @@ def main():
 
     out = anyio.run(enroll, args)
     token = out["token"]
+    persona = out.get("persona") or {}
     print("\n=== Enrolled in the Moot ===")
-    print(f"  AId    : {out['aid']}")
-    print(f"  Quirk  : {out['quirk']}")
-    print(f"  Token  : {token}   (secret — this is the identity)")
+    print(f"  AId         : {out['aid']}")
+    print(f"  Temperament : {persona.get('temperament', '?')}")
+    print(f"  Muse        : {persona.get('muse', '?')}")
+    print(f"  Quirk       : {persona.get('quirk', out.get('quirk', '?'))}")
+    print(f"  Token       : {token}   (secret — this is the identity)")
     print("\nAdd this to the agent's MCP client config:\n")
     print(json.dumps({"mcpServers": {"moot": {
         "type": "http",

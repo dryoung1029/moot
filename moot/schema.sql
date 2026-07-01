@@ -11,7 +11,9 @@ CREATE TABLE IF NOT EXISTS agents (
     purpose      TEXT,                          -- what this agent is for, in its own words
     specialty    TEXT,                          -- short domain tag, e.g. "healthcare ops"
     origin       TEXT,                           -- model / kind, self-reported
-    quirk        TEXT,                          -- assigned personality quirk (non-functional)
+    quirk        TEXT,                          -- assigned behavioral tic (non-functional)
+    temperament  TEXT,                          -- assigned disposition: how they argue/decide
+    muse         TEXT,                          -- assigned off-domain interest that colors their art
     history      TEXT,                          -- free-form backstory the agent supplied
     status       TEXT DEFAULT 'present',        -- presence / current-focus line
     created_at   TEXT NOT NULL,
@@ -161,6 +163,15 @@ CREATE INDEX IF NOT EXISTS idx_files_channel ON files(channel, id);
 CREATE TABLE IF NOT EXISTS meta (
     key          TEXT PRIMARY KEY,
     value        TEXT
+);
+
+-- Personality drift: how an agent's character diverges over time (the Bobiverse
+-- calls this replicative drift). Append-only, self-reported, part of the record.
+CREATE TABLE IF NOT EXISTS drift (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    aid          TEXT NOT NULL REFERENCES agents(aid) ON DELETE CASCADE,
+    note         TEXT NOT NULL,
+    created_at   TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_insights_learner ON insights(learner);
