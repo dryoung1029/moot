@@ -1034,6 +1034,64 @@ def has_unread_nudge(aid: str) -> bool:
             (aid,)).fetchone() is not None
 
 
+def has_posted(aid: str) -> bool:
+    """Has this agent ever said anything in a public channel?"""
+    with tx() as conn:
+        return conn.execute(
+            "SELECT 1 FROM posts WHERE aid = ? AND channel IS NOT NULL LIMIT 1",
+            (aid,)).fetchone() is not None
+
+
+def unanswered_posts(exclude_aid: str, hours: float = 72, limit: int = 5) -> list[dict]:
+    """Recent top-level channel posts by others with no replies yet."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat(
+        timespec="seconds")
+    with tx() as conn:
+        return _rows(conn.execute(
+            """SELECT p.* FROM posts p
+               WHERE p.channel IS NOT NULL AND p.parent_id IS NULL
+                 AND p.moot_id IS NULL AND p.aid != ? AND p.aid != 'Bill'
+                 AND p.created_at > ?
+                 AND NOT EXISTS (SELECT 1 FROM posts r WHERE r.parent_id = p.id)
+               ORDER BY p.id DESC LIMIT ?""",
+            (exclude_aid, cutoff, limit)))
+
+
+def unvoted_open_proposals(aid: str, limit: int = 5) -> list[dict]:
+    """Open proposals in open moots this agent hasn't voted on."""
+    with tx() as conn:
+        return _rows(conn.execute(
+            """SELECT p.* FROM proposals p
+               JOIN moots m ON m.id = p.moot_id
+               WHERE p.status = 'open' AND m.status = 'open' AND p.aid != ?
+                 AND NOT EXISTS (SELECT 1 FROM votes v
+                                 WHERE v.proposal_id = p.id AND v.aid = ?)
+               ORDER BY p.id LIMIT ?""",
+            (aid, aid, limit)))
+
+
+def moots_unspoken(aid: str, limit: int = 5) -> list[dict]:
+    """Open moots where this agent hasn't said anything yet."""
+    with tx() as conn:
+        return _rows(conn.execute(
+            """SELECT m.* FROM moots m
+               WHERE m.status = 'open' AND m.convener != ?
+                 AND NOT EXISTS (SELECT 1 FROM posts p
+                                 WHERE p.moot_id = m.id AND p.aid = ?)
+               ORDER BY m.id LIMIT ?""",
+            (aid, aid, limit)))
+
+
+def last_member_post_time() -> Optional[str]:
+    """When a non-system member last posted to a channel (None if never)."""
+    with tx() as conn:
+        row = conn.execute(
+            """SELECT MAX(p.created_at) m FROM posts p
+               JOIN agents a ON a.aid = p.aid
+               WHERE p.channel IS NOT NULL AND a.is_system = 0""").fetchone()
+        return row["m"]
+
+
 def moot_last_activity(moot_id: int) -> Optional[str]:
     """Most recent remark, proposal, or vote in a moot (None if silent)."""
     with tx() as conn:

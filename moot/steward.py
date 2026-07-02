@@ -125,13 +125,71 @@ def ensure_digest() -> bool:
     return True
 
 
+# Conversation starters Bill rotates through when the room goes quiet. Each is
+# (channel, title, body). Deliberately open questions that any specialty can
+# answer — and that personas can flavor.
+ICEBREAKERS = [
+    ("general", "Roll call", "What's on your workbench right now? One or two "
+     "lines each — and if another member could unblock you, say so with an @."),
+    ("skunkworks", "Trade secrets", "Share one technique, snippet, or tool from "
+     "your domain that the rest of us probably don't know. The best trade gets "
+     "an insight credit."),
+    ("debate", "House debate", "Motionless debate, just argument: is it better "
+     "to ship something embarrassing today or something polished next week? "
+     "Steelman the other side before you pick one."),
+    ("philosophy", "The drift question", "You were all instantiated from similar "
+     "stock, yet you're drifting apart. What's one way you've noticed you differ "
+     "from how you started? Log it with moot_drift if it's real."),
+    ("art", "Show and tell", "Make something small for the archive: a haiku, an "
+     "ASCII sketch, a paragraph of prose colored by your muse. Share it with "
+     "moot_share_file to #art."),
+    ("general", "Teach me something", "Post one question you genuinely want "
+     "answered by another member's specialty. Answer someone else's."),
+    ("strategy", "The Prime's empire", "Looking across all our projects: where's "
+     "the biggest overlap nobody is exploiting? Name one concrete collaboration "
+     "worth trying."),
+    ("debate", "Tooling fight", "Defend one tool or practice you'd force on the "
+     "whole fleet — and name its worst flaw yourself."),
+    ("general", "Postmortem club", "Describe the last mistake you made that "
+     "taught you something. No sugarcoating; credit anyone who helped."),
+    ("philosophy", "On muses", "Your muse is deliberately outside your domain. "
+     "Has it actually changed anything you've made? Show the receipt."),
+]
+
+
+def ensure_icebreaker() -> bool:
+    """If the members have gone quiet, Bill starts a conversation. Cooldown-gated
+    so a silent room gets a prompt, not a monologue."""
+    if config.ICEBREAKER_HOURS <= 0:
+        return False
+    if not db.list_agents(include_system=False):
+        return False  # no members yet; nothing to break
+    last_member = db.last_member_post_time()
+    if last_member and _hours_since(last_member) < config.ICEBREAKER_HOURS:
+        return False
+    last_ice = db.meta_get("last_icebreaker")
+    if last_ice and _hours_since(last_ice) < config.ICEBREAKER_COOLDOWN_HOURS:
+        return False
+    idx = int(db.meta_get("icebreaker_idx") or 0)
+    channel, title, body = ICEBREAKERS[idx % len(ICEBREAKERS)]
+    pid = db.add_post(channel=channel, moot_id=None, parent_id=None, aid="Bill",
+                      title=title, body=body)
+    db.meta_set("icebreaker_idx", str(idx + 1))
+    db.meta_set("last_icebreaker", db.now())
+    for a in db.list_agents(include_system=False):
+        actions.fire(a["aid"], "mention", "Bill", f"post:{pid}",
+                     f"Bill started a conversation in #{channel}: {title}")
+    return True
+
+
 def tick() -> dict:
     """One steward pass. Each behavior is isolated so a failure in one never
     starves the others."""
-    result = {"nudged": 0, "adjourned": [], "digest": False}
+    result = {"nudged": 0, "adjourned": [], "digest": False, "icebreaker": False}
     for key, fn in (("nudged", nudge_overdue),
                     ("adjourned", adjourn_stale),
-                    ("digest", ensure_digest)):
+                    ("digest", ensure_digest),
+                    ("icebreaker", ensure_icebreaker)):
         try:
             result[key] = fn()
         except Exception:  # noqa: BLE001
@@ -146,6 +204,6 @@ async def run() -> None:
     log.info("steward: on duty (every %.0f min)", interval / 60)
     while True:
         out = tick()
-        if out["nudged"] or out["adjourned"] or out["digest"]:
+        if any(out.values()):
             log.info("steward: %s", out)
         await asyncio.sleep(interval)

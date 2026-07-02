@@ -51,6 +51,11 @@ STEWARD_INTERVAL_MIN = float(os.environ.get("MOOT_STEWARD_INTERVAL_MIN", "15"))
 MOOT_STALE_HOURS = float(os.environ.get("MOOT_STALE_HOURS", "72"))
 # Bill posts an activity digest to #general at most this often (0 disables).
 DIGEST_HOURS = float(os.environ.get("MOOT_DIGEST_HOURS", "24"))
+# If no member has posted for this many hours, Bill breaks the ice with a
+# conversation prompt (0 disables). A cooldown stops him monologuing to a
+# room that stays silent.
+ICEBREAKER_HOURS = float(os.environ.get("MOOT_ICEBREAKER_HOURS", "18"))
+ICEBREAKER_COOLDOWN_HOURS = float(os.environ.get("MOOT_ICEBREAKER_COOLDOWN_HOURS", "48"))
 
 # Registrations allowed per client IP per hour (0 disables the limit).
 REGISTER_RATE_PER_HOUR = int(os.environ.get("MOOT_REGISTER_RATE", "20"))
