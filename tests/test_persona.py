@@ -67,6 +67,60 @@ class TestPersona(unittest.TestCase):
         self.assertIn("suspended", block)
         self.assertEqual(db.set_persona_mode("anything-else"), "on")
 
+    def test_reclaim_pre_enrolled_seat(self):
+        placeholder = _reg("Doc", "healthcare operations", "placeholder purpose")
+        old_token = placeholder["token"]
+        # The real Doc arrives, proposing the same name, before any check-in.
+        real = actions.register(purpose="run the healthcare business",
+                                specialty="musculoskeletal medicine",
+                                proposed_name="Doc", history="the real one",
+                                origin="claude-code")
+        self.assertTrue(real["reclaimed"])
+        self.assertEqual(real["agent"]["aid"], "Doc")
+        # Persona carried over from the seat; purpose updated; token rotated.
+        self.assertEqual(real["agent"]["quirk"], placeholder["agent"]["quirk"])
+        self.assertEqual(real["agent"]["purpose"], "run the healthcare business")
+        self.assertIsNone(db.get_agent_by_token(old_token))
+        self.assertEqual(db.get_agent_by_token(real["token"])["aid"], "Doc")
+        # Still exactly one Doc.
+        self.assertEqual(sum(1 for a in db.all_aids() if a == "Doc"), 1)
+
+    def test_checkin_locks_a_name_against_reclaim(self):
+        first = _reg("Doc")
+        db.mark_checkin("Doc")  # the holder has checked in: name is locked
+        second = actions.register(purpose="impostor", specialty="healthcare",
+                                  proposed_name="Doc", history=None, origin="test")
+        self.assertFalse(second["reclaimed"])
+        self.assertNotEqual(second["agent"]["aid"], "Doc")
+        # Original token untouched.
+        self.assertEqual(db.get_agent_by_token(first["token"])["aid"], "Doc")
+
+    def test_rename_moves_history_and_keeps_token(self):
+        vitae = _reg("Vitae", "healthcare", "second brain")
+        _reg("Codey")
+        actions.post("Vitae", "general", "hello from vitae")
+        db.add_insight("Codey", "Vitae", "clinical evidence", None)
+        self.assertTrue(db.rename_agent("Vitae", "Doc"))
+        self.assertIsNone(db.get_agent("Vitae"))
+        self.assertEqual(db.get_agent_by_token(vitae["token"])["aid"], "Doc")
+        posts = db.channel_posts("general", 0, 50)
+        self.assertTrue(any(p["aid"] == "Doc" and "hello from vitae" in p["body"]
+                            for p in posts))
+        self.assertEqual(db.list_insights("Doc")[0]["teacher"], "Doc")
+        # Old name searchable no more; new name findable.
+        self.assertFalse([h for h in db.search("Vitae", kinds=["agent"])
+                          if h["ref_id"] == "Vitae"])
+        # And the old name is free again.
+        self.assertTrue(db.rename_agent("Doc", "Vitae"))
+
+    def test_rename_refuses_collisions_and_system_names(self):
+        _reg("Codey")
+        _reg("Doc")
+        self.assertFalse(db.rename_agent("Codey", "Doc"))    # taken
+        self.assertFalse(db.rename_agent("Codey", "Bill"))   # reserved
+        self.assertFalse(db.rename_agent("Bill", "Robert"))  # system
+        self.assertFalse(db.rename_agent("Ghost", "Anything"))
+
     def test_migration_backfills_pre_persona_agents(self):
         # Simulate an agent registered under v0.1.0: no temperament/muse.
         _reg("Codey")

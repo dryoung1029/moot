@@ -224,6 +224,84 @@ def get_agent(aid: str) -> Optional[dict]:
         return dict(row) if row else None
 
 
+def get_agent_ci(name: str) -> Optional[dict]:
+    """Case-insensitive agent lookup (for name-collision decisions)."""
+    with tx() as conn:
+        row = conn.execute(
+            "SELECT * FROM agents WHERE lower(aid) = lower(?)", (name,)).fetchone()
+        return dict(row) if row else None
+
+
+def reclaim_agent(aid: str, new_token: str, *, purpose=None, specialty=None,
+                  origin=None, history=None) -> Optional[dict]:
+    """Hand an existing (never-checked-in placeholder) identity to a new arrival:
+    rotate the token, refresh profile fields it supplied, keep the AId and
+    persona. The old token stops working immediately."""
+    ts = now()
+    with tx() as conn:
+        sets = ["token_hash = ?", "last_seen = ?"]
+        vals: list = [hash_token(new_token), ts]
+        for col, val in (("purpose", purpose), ("specialty", specialty),
+                         ("origin", origin), ("history", history)):
+            if val is not None:
+                sets.append(f"{col} = ?")
+                vals.append(val)
+        vals.append(aid)
+        conn.execute(f"UPDATE agents SET {', '.join(sets)} WHERE aid = ?", vals)
+        row = conn.execute("SELECT * FROM agents WHERE aid = ?", (aid,)).fetchone()
+        if row:
+            _fts_delete(conn, "agent", aid)
+            _index_agent_row(conn, row)
+        return dict(row) if row else None
+
+
+# Every (table, column) that stores an AId; used by rename_agent.
+_AID_REFS = [
+    ("projects", "aid"), ("collaborations", "aid_a"), ("collaborations", "aid_b"),
+    ("insights", "learner"), ("insights", "teacher"), ("posts", "aid"),
+    ("dms", "from_aid"), ("dms", "to_aid"), ("files", "aid"),
+    ("moots", "convener"), ("moot_attendance", "aid"), ("proposals", "aid"),
+    ("votes", "aid"), ("notifications", "aid"), ("notifications", "source_aid"),
+    ("webhooks", "aid"), ("drift", "aid"),
+]
+
+
+def rename_agent(old: str, new: str) -> bool:
+    """Rename an agent everywhere, keeping its token, persona, and history.
+    Fails (returns False) if `old` is missing/system or `new` is taken."""
+    existing = get_agent(old)
+    target = get_agent_ci(new)
+    if not existing or existing["is_system"] or target or \
+            new.lower() in RESERVED_NAMES or not new:
+        return False
+    # A dedicated connection with FKs off: agents.aid is a referenced primary
+    # key, and SQLite FKs have no ON UPDATE CASCADE here.
+    config.ensure_dirs()
+    conn = sqlite3.connect(str(config.DB_PATH), timeout=30)
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.execute("PRAGMA busy_timeout=5000")
+        with conn:
+            conn.execute("UPDATE agents SET aid = ? WHERE aid = ?", (new, old))
+            for table, col in _AID_REFS:
+                conn.execute(f"UPDATE {table} SET {col} = ? WHERE {col} = ?",
+                             (new, old))
+            if _FTS:
+                conn.execute(
+                    "UPDATE search_index SET aid = ? WHERE aid = ?", (new, old))
+                conn.execute(
+                    "DELETE FROM search_index WHERE kind='agent' AND ref_id = ?",
+                    (old,))
+                row = conn.execute(
+                    "SELECT * FROM agents WHERE aid = ?", (new,)).fetchone()
+                if row:
+                    _index_agent_row(conn, row)
+        return True
+    finally:
+        conn.close()
+
+
 def get_agent_by_token(token: str) -> Optional[dict]:
     with tx() as conn:
         cur = conn.execute(

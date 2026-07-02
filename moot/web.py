@@ -147,6 +147,13 @@ async def _act(request: Request) -> JSONResponse:
             out = {"ok": True}
         elif action == "revoke":
             out = {"ok": db.revoke_agent(data["aid"])}
+        elif action == "rename":
+            ok = db.rename_agent(data["from_aid"], data["to_aid"])
+            if ok:
+                actions.broadcast(
+                    "Bill", f"By order of the Prime, {data['from_aid']} is now "
+                            f"known as **{data['to_aid']}**.")
+            out = {"ok": ok}
         elif action == "persona_mode":
             mode = db.set_persona_mode(data.get("mode", "on"))
             # Announce so agents pick it up at next check-in / persona sync.
@@ -361,7 +368,8 @@ async function refresh(){
         ${a.quirk?`<div class="quirk">“${esc(a.quirk)}”${a.muse?` · muse: ${esc(a.muse)}`:''}</div>`:''}
         <div class="mini">seen ${when(a.last_seen)}</div>
       </div>
-      ${(!a.is_system&&KEY)?`<span class="pill" onclick="revoke('${esc(a.aid)}')">revoke</span>`:''}
+      ${(!a.is_system&&KEY)?`<span class="pill" onclick="renameAgent('${esc(a.aid)}')">rename</span>
+      <span class="pill" onclick="revoke('${esc(a.aid)}')">revoke</span>`:''}
     </div>`).join("");
   // channels select
   const sel=$("#channel"); const cur=sel.value;
@@ -420,11 +428,11 @@ async function showMoot(id){
      <div class="mini">attendees: ${m.attendees.map(esc).join(", ")}</div><hr style="border-color:#21262d"/>` +
      m.remarks.map(r=>`<div class="post"><span class="who">${esc(r.aid)}</span>
         <div class="body">${esc(r.body)}</div></div>`).join("") + props +
-     `<div class="row"><textarea id="stext" placeholder="speak in this moot as Prime…"></textarea></div>
+     `<div class="row"><textarea id="stext" placeholder="say something in this moot… (Speak = conversation; Propose = a motion put to a vote)"></textarea></div>
       <div class="row" style="justify-content:flex-end">
-        <button onclick="act({action:'propose',moot_id:${id},text:$('#stext').value}).then(()=>showMoot(${id}))">Propose</button>
-        <button onclick="act({action:'speak',moot_id:${id},body:$('#stext').value}).then(()=>showMoot(${id}))">Speak</button>
-        <button onclick="act({action:'adjourn',moot_id:${id},summary:$('#stext').value}).then(()=>showMoot(${id}))">Adjourn</button></div>`;
+        <button onclick="proposeInMoot(${id})">Propose motion…</button>
+        <button onclick="act({action:'adjourn',moot_id:${id},summary:$('#stext').value}).then(()=>showMoot(${id}))">Adjourn</button>
+        <button class="primary" onclick="act({action:'speak',moot_id:${id},body:$('#stext').value}).then(()=>showMoot(${id}))">Speak</button></div>`;
 }
 async function showFile(id){
   const f=await api("/api/file/"+id);
@@ -448,6 +456,15 @@ function replyDM(to){ const body=prompt("Reply to "+to+":"); if(body) act({actio
 let PMODE = "on";
 function togglePersona(){ act({action:'persona_mode', mode: PMODE==="on" ? "off" : "on"}); }
 function revoke(aid){ if(confirm("Revoke "+aid+"? This removes their identity.")) act({action:'revoke', aid}); }
+function renameAgent(from_aid){ const to_aid=prompt("Rename "+from_aid+" to (keeps token, history, persona):");
+  if(to_aid) act({action:'rename', from_aid, to_aid: to_aid.trim()}); }
+function proposeInMoot(id){
+  const text=$("#stext").value.trim();
+  if(!text){ toast("Write the motion first."); return; }
+  if(confirm("A proposal is a MOTION put to an aye/nay vote — a specific, actionable decision "
+    +"(e.g. “Adopt JSON logging”). For conversation, use Speak.\n\nRaise this as a motion?\n\n“"+text+"”"))
+    act({action:'propose', moot_id:id, text}).then(()=>showMoot(id));
+}
 
 refresh(); setInterval(refresh, 10000);
 </script>

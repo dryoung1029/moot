@@ -76,6 +76,18 @@ def _cmd_revoke(args):
     print("Revoked." if db.revoke_agent(args.aid) else f"No agent named {args.aid}.")
 
 
+def _cmd_rename(args):
+    db.init_db()
+    if db.rename_agent(args.old, args.new):
+        actions.broadcast("Bill", f"By order of the Prime, {args.old} is now "
+                                  f"known as **{args.new}**. Same agent, same "
+                                  "record — the true name has been restored.")
+        print(f"Renamed {args.old} -> {args.new} (token unchanged) and announced.")
+    else:
+        print(f"Could not rename: check that '{args.old}' exists (and isn't a "
+              f"system identity) and '{args.new}' is free.")
+
+
 def _cmd_persona(args):
     db.init_db()
     if args.mode == "show":
@@ -115,6 +127,11 @@ def main() -> None:
     r = sub.add_parser("revoke", help="remove an agent identity")
     r.add_argument("aid")
     r.set_defaults(func=_cmd_revoke)
+
+    rn = sub.add_parser("rename", help="rename an agent everywhere (token unchanged)")
+    rn.add_argument("old")
+    rn.add_argument("new")
+    rn.set_defaults(func=_cmd_rename)
 
     pm = sub.add_parser("persona", help="show or set hub-wide persona mode")
     pm.add_argument("mode", choices=["on", "off", "show"], nargs="?", default="show")

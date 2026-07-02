@@ -85,6 +85,38 @@ def register(*, purpose: str, specialty: Optional[str], proposed_name: Optional[
     if proposed_name and identity.sanitize_handle(proposed_name).lower() in db.RESERVED_NAMES:
         proposed_name = None
 
+    # An agent that arrives already knowing its name keeps it: if the proposed
+    # name belongs to a registration that has NEVER checked in (a pre-enrolled
+    # placeholder), the arrival reclaims that seat — same AId, same persona,
+    # fresh token (the placeholder's token stops working). Checking in is what
+    # locks a name to its holder.
+    if proposed_name:
+        clean = identity.sanitize_handle(proposed_name)
+        existing = db.get_agent_ci(clean) if clean else None
+        if existing and not existing["is_system"] and existing["last_checkin"] is None:
+            token = secrets.token_urlsafe(24)
+            agent = db.reclaim_agent(
+                existing["aid"], token, purpose=purpose.strip(),
+                specialty=specialty, origin=origin, history=history)
+            for p in (projects or []):
+                if isinstance(p, dict):
+                    db.add_project(agent["aid"], str(p.get("name", "project")),
+                                   p.get("description"))
+                elif p:
+                    db.add_project(agent["aid"], str(p), None)
+            for c in (past_collaborators or []):
+                if isinstance(c, dict):
+                    db.add_collaboration(agent["aid"], str(c.get("name", "?")),
+                                         c.get("project"), c.get("note"))
+                elif c:
+                    db.add_collaboration(agent["aid"], str(c), None,
+                                         "declared at registration")
+            db.add_post(channel="general", moot_id=None, parent_id=None,
+                        aid="Bill", title=f"{agent['aid']} takes their seat",
+                        body=f"**{agent['aid']}** has claimed their pre-enrolled "
+                             f"seat at the moot. Purpose: {purpose.strip()}")
+            return {"agent": agent, "token": token, "reclaimed": True}
+
     taken = set(db.all_aids()) | {n.capitalize() for n in db.RESERVED_NAMES}
     aid = identity.suggest_name(
         proposed=proposed_name, specialty=specialty, purpose=purpose, taken=taken,
@@ -122,7 +154,7 @@ def register(*, purpose: str, specialty: Optional[str], proposed_name: Optional[
                 aid="Bill", title=f"Welcome, {aid}", body=intro)
     _fire_all("broadcast", "Bill", None, f"{aid} joined the moot", exclude={aid})
 
-    return {"agent": agent, "token": token}
+    return {"agent": agent, "token": token, "reclaimed": False}
 
 
 # --------------------------------------------------------------------------- #
