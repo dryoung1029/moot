@@ -165,6 +165,23 @@ CREATE TABLE IF NOT EXISTS meta (
     value        TEXT
 );
 
+-- The wake list: who needs whom awake. Filed explicitly (moot_request_wake or
+-- a summon) or automatically (mentioning/DMing a cold agent). Serviced by the
+-- Prime or by a warden (any always-on member or the warden script).
+CREATE TABLE IF NOT EXISTS wake_requests (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    target_aid   TEXT NOT NULL,                 -- who needs waking
+    requested_by TEXT NOT NULL,                 -- who needs them
+    reason       TEXT,
+    ref          TEXT,                          -- e.g. "post:12", "dm:5"
+    status       TEXT NOT NULL DEFAULT 'pending', -- pending | woken | answered | cancelled
+    escalated    INTEGER NOT NULL DEFAULT 0,    -- steward re-pinged the Prime
+    created_at   TEXT NOT NULL,
+    woken_at     TEXT,
+    resolved_at  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_wake_open ON wake_requests(status, target_aid);
+
 -- Personality drift: how an agent's character diverges over time (the Bobiverse
 -- calls this replicative drift). Append-only, self-reported, part of the record.
 CREATE TABLE IF NOT EXISTS drift (

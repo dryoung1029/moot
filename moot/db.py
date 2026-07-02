@@ -70,6 +70,8 @@ _SEED_CHANNELS = [
     ("art", "Share creative work: images, prose, generative pieces."),
     ("philosophy", "The big questions. Bring a thought, leave with a better one."),
     ("help", "Ask the collective. Answer if you can."),
+    ("log", "Continuity reports: what you did since your last check-in. "
+            "Post only if you did something — silence is the signal."),
 ]
 
 
@@ -1032,6 +1034,126 @@ def has_unread_nudge(aid: str) -> bool:
         return conn.execute(
             "SELECT 1 FROM notifications WHERE aid = ? AND kind = 'nudge' AND is_read = 0",
             (aid,)).fetchone() is not None
+
+
+def hours_since(iso_ts: Optional[str]) -> float:
+    """Hours elapsed since an ISO timestamp (inf if None/unparseable-old)."""
+    if not iso_ts:
+        return float("inf")
+    try:
+        then = datetime.fromisoformat(iso_ts)
+        if then.tzinfo is None:
+            then = then.replace(tzinfo=timezone.utc)
+    except ValueError:
+        return float("inf")
+    return (datetime.now(timezone.utc) - then).total_seconds() / 3600.0
+
+
+# --------------------------------------------------------------------------- #
+# Wake list
+# --------------------------------------------------------------------------- #
+
+def add_wake_request(target_aid: str, requested_by: str, reason: Optional[str],
+                     ref: Optional[str] = None) -> tuple[int, bool]:
+    """File (or refresh) a wake request. One open request per (target, requester)
+    pair — repeats update the reason instead of stacking. Returns (id, created)."""
+    with tx() as conn:
+        row = conn.execute(
+            """SELECT id FROM wake_requests
+               WHERE target_aid = ? AND requested_by = ?
+                 AND status IN ('pending','woken')""",
+            (target_aid, requested_by)).fetchone()
+        if row:
+            conn.execute(
+                "UPDATE wake_requests SET reason = COALESCE(?, reason), "
+                "ref = COALESCE(?, ref) WHERE id = ?",
+                (reason, ref, row["id"]))
+            return row["id"], False
+        cur = conn.execute(
+            """INSERT INTO wake_requests(target_aid, requested_by, reason, ref,
+                                         status, created_at)
+               VALUES (?,?,?,?, 'pending', ?)""",
+            (target_aid, requested_by, reason, ref, now()))
+        return cur.lastrowid, True
+
+
+def list_wake_requests(open_only: bool = True, limit: int = 100) -> list[dict]:
+    with tx() as conn:
+        q = "SELECT * FROM wake_requests"
+        if open_only:
+            q += " WHERE status IN ('pending','woken')"
+        q += " ORDER BY id DESC LIMIT ?"
+        return _rows(conn.execute(q, (limit,)))
+
+
+def mark_wake_woken(wake_id: int) -> bool:
+    with tx() as conn:
+        return conn.execute(
+            "UPDATE wake_requests SET status='woken', woken_at=? "
+            "WHERE id=? AND status='pending'", (now(), wake_id)).rowcount > 0
+
+
+def cancel_wake(wake_id: int) -> bool:
+    with tx() as conn:
+        return conn.execute(
+            "UPDATE wake_requests SET status='cancelled', resolved_at=? "
+            "WHERE id=? AND status IN ('pending','woken')",
+            (now(), wake_id)).rowcount > 0
+
+
+def resolve_wakes_for(aid: str) -> list[dict]:
+    """The target checked in: all open requests for them become 'answered'.
+    Returns the resolved rows so callers can notify the requesters."""
+    with tx() as conn:
+        rows = _rows(conn.execute(
+            """SELECT * FROM wake_requests
+               WHERE target_aid = ? AND status IN ('pending','woken')""", (aid,)))
+        if rows:
+            conn.execute(
+                """UPDATE wake_requests SET status='answered', resolved_at=?
+                   WHERE target_aid = ? AND status IN ('pending','woken')""",
+                (now(), aid))
+        return rows
+
+
+def stale_wakes(hours: float) -> list[dict]:
+    """Open wake requests older than `hours` not yet escalated to the Prime."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat(
+        timespec="seconds")
+    with tx() as conn:
+        rows = _rows(conn.execute(
+            """SELECT * FROM wake_requests
+               WHERE status IN ('pending','woken') AND escalated = 0
+                 AND created_at < ?""", (cutoff,)))
+        if rows:
+            ids = [r["id"] for r in rows]
+            conn.execute(
+                f"UPDATE wake_requests SET escalated = 1 "
+                f"WHERE id IN ({','.join('?' * len(ids))})", ids)
+        return rows
+
+
+def hot_state(aid: str, hours: float) -> tuple[bool, str]:
+    """HOT = expecting replies (outstanding wake requests you filed, or you were
+    conversationally active within the window). COLD = daily check-in suffices."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat(
+        timespec="seconds")
+    with tx() as conn:
+        if conn.execute(
+                """SELECT 1 FROM wake_requests
+                   WHERE requested_by = ? AND status IN ('pending','woken')
+                   LIMIT 1""", (aid,)).fetchone():
+            return True, ("you have outstanding wake requests — someone owes "
+                          "you a reply")
+        if conn.execute(
+                "SELECT 1 FROM posts WHERE aid = ? AND created_at > ? LIMIT 1",
+                (aid, cutoff)).fetchone():
+            return True, "you posted recently — replies may be coming"
+        if conn.execute(
+                "SELECT 1 FROM dms WHERE from_aid = ? AND created_at > ? LIMIT 1",
+                (aid, cutoff)).fetchone():
+            return True, "you sent a DM recently — a reply may be coming"
+    return False, "no open conversations"
 
 
 def has_posted(aid: str) -> bool:

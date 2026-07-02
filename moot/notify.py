@@ -38,3 +38,28 @@ def dispatch(webhook: Optional[dict], payload: dict) -> None:
         daemon=True,
     )
     t.start()
+
+
+def _ntfy(url: str, title: str, body: str) -> None:
+    """POST an ntfy.sh-style push: body is the message, title in a header."""
+    headers = {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Title": title[:120].replace("\n", " "),
+        "Tags": "bell",
+        "User-Agent": "Moot/Bill",
+    }
+    req = urllib.request.Request(url, data=body.encode("utf-8"),
+                                 headers=headers, method="POST")
+    try:
+        urllib.request.urlopen(req, timeout=8).close()
+    except Exception:
+        pass  # push is best-effort; the notification row is the durable copy
+
+
+def push_prime(title: str, body: str) -> None:
+    """Buzz the Prime's phone (ntfy topic set via MOOT_PRIME_PUSH_URL)."""
+    from . import config
+    if not config.PRIME_PUSH_URL:
+        return
+    threading.Thread(target=_ntfy, args=(config.PRIME_PUSH_URL, title, body),
+                     daemon=True).start()

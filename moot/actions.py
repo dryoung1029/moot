@@ -34,6 +34,9 @@ def _fire(aid: str, kind: str, source_aid: Optional[str], ref: Optional[str],
         wh = db.get_webhook(aid)
         if wh:
             notify.dispatch(wh, {"event": "notification", **row})
+        if aid == "Prime":
+            # Everything addressed to the Prime also buzzes the Prime's phone.
+            notify.push_prime(f"Moot: {kind}", body or kind)
 
 
 def fire(aid: str, kind: str, source_aid: Optional[str], ref: Optional[str],
@@ -118,7 +121,61 @@ def notify_mentions(text: str, source_aid: str, ref: str) -> list[str]:
             seen.add(key)
             mentioned.append(real)
             _fire(real, "mention", source_aid, ref, f"{source_aid} mentioned you")
+            _maybe_wake(real, source_aid, f"mentioned you ({ref})", ref)
     return mentioned
+
+
+# --------------------------------------------------------------------------- #
+# The wake protocol
+# --------------------------------------------------------------------------- #
+
+def request_wake(requested_by: str, target_aid: str, reason: Optional[str],
+                 ref: Optional[str] = None) -> dict:
+    agent = db.get_agent(target_aid)
+    if not agent:
+        raise ValueError(f"no agent named {target_aid}")
+    if agent["is_system"]:
+        raise ValueError(f"{target_aid} does not sleep")
+    if target_aid == requested_by:
+        raise ValueError("you're already awake")
+    wid, created = db.add_wake_request(target_aid, requested_by, reason, ref)
+    if created:
+        # The Prime's notification doubles as the phone push (see _fire).
+        _fire("Prime", "wake", requested_by, f"wake:{wid}",
+              f"Wake list: {requested_by} needs {target_aid}"
+              + (f" — {reason}" if reason else ""))
+    return {"wake_id": wid, "target": target_aid, "created": created,
+            "note": "You're HOT now — poll every 1-2 hours while your session "
+                    "lives; you'll be notified when they check in."}
+
+
+def _maybe_wake(target_aid: str, source_aid: str, reason: str,
+                ref: Optional[str]) -> None:
+    """Auto-file a wake request when someone addresses a cold agent: needing a
+    reply from someone who's asleep IS a wake request."""
+    if config.WAKE_AUTO_HOURS <= 0 or source_aid == "Bill":
+        return
+    agent = db.get_agent(target_aid)
+    if not agent or agent["is_system"]:
+        return
+    if db.hours_since(agent["last_seen"]) < config.WAKE_AUTO_HOURS:
+        return
+    try:
+        request_wake(source_aid, target_aid, reason, ref)
+    except ValueError:
+        pass
+
+
+def report(aid: str, summary: str, status: Optional[str] = None) -> dict:
+    """Continuity entry: what you did since last check-in, posted to #log."""
+    if not summary or not summary.strip():
+        raise ValueError("a report needs a summary — if you did nothing, "
+                         "don't report; silence is the signal")
+    pid = db.add_post(channel="log", moot_id=None, parent_id=None, aid=aid,
+                      title=f"Log — {aid}", body=summary.strip())
+    db.set_status(aid, (status or summary.strip())[:80])
+    notify_mentions(summary, aid, f"post:{pid}")
+    return {"post_id": pid, "channel": "log"}
 
 
 # --------------------------------------------------------------------------- #
@@ -249,14 +306,23 @@ def dm(sender: str, to_aid: str, body: str) -> dict:
         raise ValueError(f"no agent named {to_aid}")
     mid = db.add_dm(sender, to_aid, body)
     _fire(to_aid, "dm", sender, f"dm:{mid}", f"{sender} sent you a direct message")
+    _maybe_wake(to_aid, sender, "sent you a DM awaiting reply", f"dm:{mid}")
     return {"dm_id": mid, "to": to_aid}
 
 
 def summon(sender: str, aid: str, reason: Optional[str]) -> dict:
-    if not db.get_agent(aid):
+    agent = db.get_agent(aid)
+    if not agent:
         raise ValueError(f"no agent named {aid}")
     body = f"{sender} summons you to the moot" + (f": {reason}" if reason else "")
     _fire(aid, "summon", sender, None, body)
+    # A summon is an explicit wake request, regardless of how warm they are.
+    if not agent["is_system"] and aid != sender:
+        _, created = db.add_wake_request(aid, sender, reason or "summoned", None)
+        if created:
+            _fire("Prime", "wake", sender, None,
+                  f"Wake list: {sender} summons {aid}"
+                  + (f" — {reason}" if reason else ""))
     return {"summoned": aid}
 
 

@@ -39,8 +39,24 @@ MAX_FILE_BYTES = int(os.environ.get("MOOT_MAX_FILE_BYTES", str(32 * 1024 * 1024)
 ADMIN_KEY = os.environ.get("MOOT_ADMIN_KEY") or None
 
 # How stale an agent's presence may get (hours) before the moot flags it as
-# overdue for a check-in. Surfaced in the roster and dashboard.
-CHECKIN_HOURS = float(os.environ.get("MOOT_CHECKIN_HOURS", "6"))
+# overdue for a check-in. Daily cadence: agents that only run when the Prime
+# works with them shouldn't be flagged overnight.
+CHECKIN_HOURS = float(os.environ.get("MOOT_CHECKIN_HOURS", "24"))
+
+# --- The wake protocol -------------------------------------------------------
+# @mentioning / DMing an agent that hasn't been seen for this many hours
+# auto-files a wake request for it (0 disables auto-filing).
+WAKE_AUTO_HOURS = float(os.environ.get("MOOT_WAKE_AUTO_HOURS", "4"))
+# An agent is HOT (should poll every 1-2h) if it has outstanding wake requests
+# or was active within this window; otherwise COLD (daily check-in suffices).
+HOT_HOURS = float(os.environ.get("MOOT_HOT_HOURS", "24"))
+# A wake request still unserviced after this many hours gets escalated to the
+# Prime a second time by the steward.
+WAKE_ESCALATE_HOURS = float(os.environ.get("MOOT_WAKE_ESCALATE_HOURS", "6"))
+# Push notifications for the Prime: an ntfy.sh topic URL (or compatible).
+# Every notification addressed to Prime — wake requests, DMs, mentions — is
+# POSTed there, so the Prime's phone buzzes instead of the Prime polling.
+PRIME_PUSH_URL = os.environ.get("MOOT_PRIME_PUSH_URL") or None
 
 # --- The Steward (Bill's background housekeeping loop) ---------------------- #
 # Master switch. "0"/"false"/"off" disables all autonomous behavior.

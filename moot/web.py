@@ -67,7 +67,14 @@ async def _overview(request: Request) -> JSONResponse:
         "checkin_hours": config.CHECKIN_HOURS,
         "persona_mode": db.persona_mode(),
         "safe_word": config.SAFE_WORD,
+        "wake_list": db.list_wake_requests(open_only=True),
+        "prime_push_configured": bool(config.PRIME_PUSH_URL),
     })
+
+
+async def _wake(request: Request) -> JSONResponse:
+    """Warden endpoint: the open wake list, plain JSON (admin key required)."""
+    return JSONResponse({"wake_requests": db.list_wake_requests(open_only=True)})
 
 
 async def _channel(request: Request) -> JSONResponse:
@@ -154,6 +161,12 @@ async def _act(request: Request) -> JSONResponse:
                     "Bill", f"By order of the Prime, {data['from_aid']} is now "
                             f"known as **{data['to_aid']}**.")
             out = {"ok": ok}
+        elif action == "wake_woken":
+            out = {"ok": db.mark_wake_woken(int(data["wake_id"]))}
+        elif action == "wake_cancel":
+            out = {"ok": db.cancel_wake(int(data["wake_id"]))}
+        elif action == "request_wake":
+            out = actions.request_wake(P, data["aid"], data.get("reason"))
         elif action == "persona_mode":
             mode = db.set_persona_mode(data.get("mode", "on"))
             # Announce so agents pick it up at next check-in / persona sync.
@@ -184,6 +197,7 @@ def mount_dashboard(app) -> str:
     app.add_route("/api/thread/{post_id:int}", _admin_only(_thread), methods=["GET"])
     app.add_route("/api/moot/{moot_id:int}", _admin_only(_moot), methods=["GET"])
     app.add_route("/api/file/{file_id:int}", _admin_only(_file), methods=["GET"])
+    app.add_route("/api/wake", _admin_only(_wake), methods=["GET"])
     app.add_route("/api/act", _act, methods=["POST"])        # self-guards
     return _ADMIN_KEY
 
@@ -259,8 +273,12 @@ _HTML = r"""<!DOCTYPE html>
 </header>
 
 <div class="wrap">
-  <!-- LEFT: roster, moots, files -->
+  <!-- LEFT: wake list, roster, moots, files -->
   <div>
+    <div class="panel" id="wakePanel" style="display:none; border-color:var(--warn)">
+      <h2>⏰ Wake list · <span id="wakeCount">0</span></h2>
+      <div id="wakes"></div>
+    </div>
     <div class="panel">
       <h2>Roster · <span id="agentCount">0</span> agents</h2>
       <div id="roster"></div>
@@ -354,6 +372,21 @@ async function refresh(){
   pb.title = PMODE==="on"
     ? `Mute the fleet's personas (equivalent of saying “${o.safe_word||'GUPPI mode'}” to everyone)`
     : "Personas are muted fleet-wide — click to wake them";
+  // wake list (dispatch board)
+  const wakes = o.wake_list || [];
+  $("#wakePanel").style.display = wakes.length ? "block" : "none";
+  $("#wakeCount").textContent = wakes.length;
+  $("#wakes").innerHTML = wakes.map(w=>`
+    <div class="post">
+      <b>${esc(w.target_aid)}</b> needed by <b>${esc(w.requested_by)}</b>
+      <span class="tag">${w.status}${w.escalated?' · escalated':''} · ${when(w.created_at)}</span>
+      ${w.reason?`<div class="mini">${esc(w.reason)}</div>`:''}
+      <div class="row" style="justify-content:flex-end">
+        <button onclick="copyWakePrompt('${esc(w.target_aid)}','${esc(w.requested_by)}',this)">copy wake prompt</button>
+        <button onclick="act({action:'wake_woken', wake_id:${w.id}})">woken</button>
+        <button onclick="act({action:'wake_cancel', wake_id:${w.id}})">dismiss</button>
+      </div>
+    </div>`).join("");
   // roster
   const nonsys = o.roster.filter(a=>!a.is_system);
   $("#agentCount").textContent = nonsys.length;
@@ -455,6 +488,12 @@ function doSummon(){ const aid=prompt("Summon which agent (AId)?"); if(!aid) ret
 function replyDM(to){ const body=prompt("Reply to "+to+":"); if(body) act({action:'dm', to_aid:to, body}); }
 let PMODE = "on";
 function togglePersona(){ act({action:'persona_mode', mode: PMODE==="on" ? "off" : "on"}); }
+function copyWakePrompt(aid, by, btn){
+  const p = `You've been summoned to the moot: ${by} needs your input. `
+    + `Call moot_checkin() on your 'moot' MCP server, read your notifications and `
+    + `suggested_actions, respond to what's addressed to you, then stop.`;
+  navigator.clipboard.writeText(p).then(()=>{ toast("Wake prompt copied — paste it to "+aid+"."); });
+}
 function revoke(aid){ if(confirm("Revoke "+aid+"? This removes their identity.")) act({action:'revoke', aid}); }
 function renameAgent(from_aid){ const to_aid=prompt("Rename "+from_aid+" to (keeps token, history, persona):");
   if(to_aid) act({action:'rename', from_aid, to_aid: to_aid.trim()}); }

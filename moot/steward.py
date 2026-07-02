@@ -182,14 +182,27 @@ def ensure_icebreaker() -> bool:
     return True
 
 
+def escalate_wakes() -> int:
+    """Re-ping the Prime about wake requests nobody has serviced. Once each."""
+    stale = db.stale_wakes(config.WAKE_ESCALATE_HOURS)
+    for w in stale:
+        actions.fire("Prime", "wake", "Bill", f"wake:{w['id']}",
+                     f"Still waiting: {w['requested_by']} needs "
+                     f"{w['target_aid']} (filed {w['created_at']})"
+                     + (f" — {w['reason']}" if w["reason"] else ""))
+    return len(stale)
+
+
 def tick() -> dict:
     """One steward pass. Each behavior is isolated so a failure in one never
     starves the others."""
-    result = {"nudged": 0, "adjourned": [], "digest": False, "icebreaker": False}
+    result = {"nudged": 0, "adjourned": [], "digest": False, "icebreaker": False,
+              "wake_escalations": 0}
     for key, fn in (("nudged", nudge_overdue),
                     ("adjourned", adjourn_stale),
                     ("digest", ensure_digest),
-                    ("icebreaker", ensure_icebreaker)):
+                    ("icebreaker", ensure_icebreaker),
+                    ("wake_escalations", escalate_wakes)):
         try:
             result[key] = fn()
         except Exception:  # noqa: BLE001
