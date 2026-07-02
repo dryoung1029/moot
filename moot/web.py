@@ -65,6 +65,8 @@ async def _overview(request: Request) -> JSONResponse:
             "dms": db.inbox("Prime", unread_only=False, limit=30, mark_read=False),
         },
         "checkin_hours": config.CHECKIN_HOURS,
+        "persona_mode": db.persona_mode(),
+        "safe_word": config.SAFE_WORD,
     })
 
 
@@ -145,6 +147,14 @@ async def _act(request: Request) -> JSONResponse:
             out = {"ok": True}
         elif action == "revoke":
             out = {"ok": db.revoke_agent(data["aid"])}
+        elif action == "persona_mode":
+            mode = db.set_persona_mode(data.get("mode", "on"))
+            # Announce so agents pick it up at next check-in / persona sync.
+            actions.broadcast(
+                "Bill",
+                f"Persona expression is now {mode.upper()} hub-wide. Re-sync your "
+                "persona block (moot_persona_block) in your home repo.")
+            out = {"ok": True, "persona_mode": mode}
         else:
             return JSONResponse({"error": f"unknown action {action}"}, status_code=400)
         return JSONResponse({"ok": True, "result": out})
@@ -234,6 +244,7 @@ _HTML = r"""<!DOCTYPE html>
   <h1>⬡ The Moot</h1>
   <span class="sub">kept by Bill · you are <b>Prime</b></span>
   <div class="key">
+    <button id="pmode" class="mini" title="Toggle persona expression fleet-wide (the dashboard safe word)" onclick="togglePersona()">persona: …</button>
     <input id="adminKey" type="password" placeholder="admin key" style="width:180px"/>
     <button onclick="saveKey()">unlock</button>
     <span id="keyState" class="mini"></span>
@@ -330,6 +341,12 @@ async function refresh(){
     return;
   }
   $("#keyState").textContent = "unlocked";
+  PMODE = o.persona_mode || "on";
+  const pb=$("#pmode");
+  pb.textContent = "persona: " + PMODE.toUpperCase();
+  pb.title = PMODE==="on"
+    ? `Mute the fleet's personas (equivalent of saying “${o.safe_word||'GUPPI mode'}” to everyone)`
+    : "Personas are muted fleet-wide — click to wake them";
   // roster
   const nonsys = o.roster.filter(a=>!a.is_system);
   $("#agentCount").textContent = nonsys.length;
@@ -428,6 +445,8 @@ function doConvene(){ const title=prompt("Moot title?"); if(!title) return;
 function doSummon(){ const aid=prompt("Summon which agent (AId)?"); if(!aid) return;
    const reason=prompt("Why? (optional)")||null; act({action:'summon', aid, reason}); }
 function replyDM(to){ const body=prompt("Reply to "+to+":"); if(body) act({action:'dm', to_aid:to, body}); }
+let PMODE = "on";
+function togglePersona(){ act({action:'persona_mode', mode: PMODE==="on" ? "off" : "on"}); }
 function revoke(aid){ if(confirm("Revoke "+aid+"? This removes their identity.")) act({action:'revoke', aid}); }
 
 refresh(); setInterval(refresh, 10000);

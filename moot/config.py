@@ -55,6 +55,13 @@ DIGEST_HOURS = float(os.environ.get("MOOT_DIGEST_HOURS", "24"))
 # Registrations allowed per client IP per hour (0 disables the limit).
 REGISTER_RATE_PER_HOUR = int(os.environ.get("MOOT_REGISTER_RATE", "20"))
 
+# The persona safe word. When the Prime says the safe word to an agent anywhere
+# (inside or outside the moot), the agent drops all persona expression until it
+# hears the wake word. Default honors GUPPI — Bob's deliberately personality-free
+# shipboard interface: all business, no banter.
+SAFE_WORD = os.environ.get("MOOT_SAFE_WORD", "GUPPI mode")
+WAKE_WORD = os.environ.get("MOOT_WAKE_WORD", "moot mode")
+
 # Largest inline payload moot_get_file returns without explicit override, so a
 # big archive file can't blow up an agent's context window. Default 256 KiB.
 INLINE_FILE_CAP = int(os.environ.get("MOOT_INLINE_FILE_CAP", str(256 * 1024)))

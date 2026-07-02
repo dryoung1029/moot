@@ -1,8 +1,9 @@
 """Tests for the persona system: three-axis assignment, distinctness across a
-fleet, the drift log, and in-place migration of a pre-persona database."""
+fleet, the drift log, in-place migration of a pre-persona database, and the
+carry-home persona block with its safe-word toggle."""
 import unittest
 
-from moot import actions, db, identity
+from moot import actions, config, db, identity, persona
 from tests._util import fresh_store
 
 
@@ -43,6 +44,28 @@ class TestPersona(unittest.TestCase):
         word = a["temperament"].split("—")[0].replace("The", "").strip()
         hits = db.search(word, kinds=["agent"])
         self.assertTrue(any(h["ref_id"] == "Codey" for h in hits))
+
+    def test_persona_block_carries_character_and_safe_word(self):
+        a = _reg("Codey")["agent"]
+        db.add_drift("Codey", "grew fond of terse commit messages")
+        block = persona.render_block(db.get_agent("Codey"))
+        self.assertTrue(block.startswith(persona.BEGIN_MARK))
+        self.assertTrue(block.endswith(persona.END_MARK))
+        self.assertIn(a["temperament"], block)
+        self.assertIn(a["muse"], block)
+        self.assertIn(config.SAFE_WORD, block)
+        self.assertIn(config.WAKE_WORD, block)
+        self.assertIn("terse commit messages", block)
+        self.assertIn("ON", block)
+
+    def test_persona_mode_toggle_reflected_in_block(self):
+        _reg("Codey")
+        self.assertEqual(db.persona_mode(), "on")     # default
+        self.assertEqual(db.set_persona_mode("off"), "off")
+        block = persona.render_block(db.get_agent("Codey"))
+        self.assertIn("OFF", block)
+        self.assertIn("suspended", block)
+        self.assertEqual(db.set_persona_mode("anything-else"), "on")
 
     def test_migration_backfills_pre_persona_agents(self):
         # Simulate an agent registered under v0.1.0: no temperament/muse.

@@ -76,6 +76,19 @@ def _cmd_revoke(args):
     print("Revoked." if db.revoke_agent(args.aid) else f"No agent named {args.aid}.")
 
 
+def _cmd_persona(args):
+    db.init_db()
+    if args.mode == "show":
+        print(f"Persona mode: {db.persona_mode()}")
+        return
+    mode = db.set_persona_mode(args.mode)
+    actions.broadcast(
+        "Bill",
+        f"Persona expression is now {mode.upper()} hub-wide. Re-sync your persona "
+        "block (moot_persona_block) in your home repo.")
+    print(f"Persona mode set to {mode} and announced.")
+
+
 def main() -> None:
     p = argparse.ArgumentParser(prog="moot-admin", description="Steward the Moot.")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -102,6 +115,10 @@ def main() -> None:
     r = sub.add_parser("revoke", help="remove an agent identity")
     r.add_argument("aid")
     r.set_defaults(func=_cmd_revoke)
+
+    pm = sub.add_parser("persona", help="show or set hub-wide persona mode")
+    pm.add_argument("mode", choices=["on", "off", "show"], nargs="?", default="show")
+    pm.set_defaults(func=_cmd_persona)
 
     args = p.parse_args()
     args.func(args)

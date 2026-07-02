@@ -827,6 +827,17 @@ def meta_set(key: str, value: str) -> None:
         )
 
 
+def persona_mode() -> str:
+    """Hub-wide persona expression switch: 'on' (default) or 'off'."""
+    return meta_get("persona_mode") or "on"
+
+
+def set_persona_mode(mode: str) -> str:
+    mode = "off" if str(mode).strip().lower() in ("off", "0", "false") else "on"
+    meta_set("persona_mode", mode)
+    return mode
+
+
 # --------------------------------------------------------------------------- #
 # Search
 # --------------------------------------------------------------------------- #
