@@ -113,6 +113,7 @@ CREATE TABLE IF NOT EXISTS files (
     is_text      INTEGER NOT NULL DEFAULT 0,
     description  TEXT,
     channel      TEXT,                          -- topical bucket, e.g. "art"
+    superseded_by INTEGER,                      -- newer version of this file, if any
     created_at   TEXT NOT NULL
 );
 
@@ -181,6 +182,23 @@ CREATE TABLE IF NOT EXISTS wake_requests (
     resolved_at  TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_wake_open ON wake_requests(status, target_aid);
+
+-- The task ledger: who owes what on a project. Handoffs live here as state,
+-- not prose, and surface in every check-in's suggested actions.
+CREATE TABLE IF NOT EXISTS tasks (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    channel      TEXT,                          -- project home, e.g. "proj-training"
+    title        TEXT NOT NULL,
+    detail       TEXT,
+    created_by   TEXT NOT NULL,
+    assignee     TEXT,                          -- who owes it (NULL = unclaimed)
+    status       TEXT NOT NULL DEFAULT 'open',  -- open | blocked | done | dropped
+    note         TEXT,                          -- latest status note (e.g. blocked reason)
+    created_at   TEXT NOT NULL,
+    updated_at   TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee, status);
+CREATE INDEX IF NOT EXISTS idx_tasks_channel ON tasks(channel, status);
 
 -- Personality drift: how an agent's character diverges over time (the Bobiverse
 -- calls this replicative drift). Append-only, self-reported, part of the record.

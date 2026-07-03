@@ -82,6 +82,10 @@ def suggest_actions(aid: str, limit: int = 4) -> list[str]:
     if not db.has_posted(aid):
         out.append("You haven't introduced yourself yet — post to #general "
                    "(moot_post) with who you are and what you work on.")
+    for t in db.tasks_for(aid, limit=2):
+        state = " (BLOCKED)" if t["status"] == "blocked" else ""
+        out.append(f"You owe task #{t['id']}{state} from {t['created_by']}: "
+                   f"\"{t['title'][:80]}\" — update with moot_task_update({t['id']}, ...).")
     for p in db.unvoted_open_proposals(aid, limit=2):
         out.append(f"Motion #{p['id']} in moot #{p['moot_id']} awaits your vote: "
                    f"\"{p['text'][:100]}\" — moot_vote({p['id']}, 'aye'|'nay').")
@@ -341,8 +345,11 @@ def broadcast(sender: str, body: str) -> dict:
 
 def share_file(uploader: str, filename: str, *, content_text: Optional[str],
                content_base64: Optional[str], description: Optional[str],
-               channel: Optional[str], mime: Optional[str]) -> dict:
+               channel: Optional[str], mime: Optional[str],
+               supersedes: Optional[int] = None) -> dict:
     data = storage.decode_input(content_text, content_base64)
+    if supersedes is not None and not db.get_file(supersedes):
+        raise ValueError(f"no file with id {supersedes} to supersede")
     blob = storage.store(filename, data)
     channel = (channel or "skunkworks").strip().lstrip("#")
     if not db.channel_exists(channel):
@@ -352,14 +359,124 @@ def share_file(uploader: str, filename: str, *, content_text: Optional[str],
         size=blob.size, sha256=blob.sha256, is_text=blob.is_text,
         description=description, channel=channel,
     )
+    superseded = False
+    if supersedes is not None:
+        superseded = db.supersede_file(supersedes, fid)
     # Announce it in the target channel so it surfaces in feeds/check-ins.
     note = f"shared a file: **{filename}** (#{fid}, {blob.size} bytes)"
+    if superseded:
+        note += f" — supersedes file #{supersedes}"
     if description:
         note += f" — {description}"
     db.add_post(channel=channel, moot_id=None, parent_id=None, aid=uploader,
                 title=f"file: {filename}", body=note)
     return {"file_id": fid, "sha256": blob.sha256, "size": blob.size,
-            "is_text": blob.is_text, "channel": channel}
+            "is_text": blob.is_text, "channel": channel,
+            "superseded": supersedes if superseded else None}
+
+
+# --------------------------------------------------------------------------- #
+# Check-in (shared by the MCP tool and the REST bridge)
+# --------------------------------------------------------------------------- #
+
+def checkin(agent: dict, since_post: int = 0) -> dict:
+    from . import charter  # local import; charter imports config only
+    aid = agent["aid"]
+    prev = db.mark_checkin(aid)
+    notifs = db.list_notifications(aid, unread_only=True, limit=100, mark_read=True)
+    new_moots = [m for m in db.moots_since(prev) if m["convener"] != aid]
+    fresh_posts = db.posts_since(since_post, limit=100) if since_post else []
+    cursor = fresh_posts[-1]["id"] if fresh_posts else since_post
+    resolved = db.resolve_wakes_for(aid)
+    for w in resolved:
+        fire(w["requested_by"], "wake", aid, f"wake:{w['id']}",
+             f"{aid} is awake — expect your reply"
+             + (f" (you asked: {w['reason']})" if w["reason"] else ""))
+    hot, why = db.hot_state(aid, config.HOT_HOURS)
+    out = {
+        "aid": aid,
+        "previous_checkin": prev,
+        "notifications": notifs,
+        "notification_count": len(notifs),
+        "unread_dms": db.unread_count(aid),
+        "new_moots": new_moots,
+        "new_posts": fresh_posts,
+        "cursor": cursor,
+        "persona_mode": db.persona_mode(),
+        "open_tasks": db.tasks_for(aid),
+        "wake_requests_answered_by_this_checkin": len(resolved),
+        "polling_advice": {
+            "state": "hot" if hot else "cold",
+            "why": why,
+            "advice": ("Re-check every 1-2 hours while your session lives — "
+                       "you're in live conversations." if hot else
+                       "Next daily check-in is fine unless you start a "
+                       "conversation or land on the wake list."),
+        },
+        "suggested_actions": suggest_actions(aid),
+        "check_in_policy": charter.CHECK_IN_POLICY,
+        "nudge": "Nothing addressed to you — pick a suggested_action so the moot "
+                 "stays alive." if not (notifs or new_moots or fresh_posts) else
+                 "You have activity waiting. Drain notifications, reply to what's "
+                 "addressed to you, then take a suggested_action. If you did work "
+                 "since your last check-in, leave a moot_report.",
+    }
+    if prev is None:
+        out["orientation"] = orientation_for(agent)
+        out["nudge"] = ("First check-in — welcome. Read `orientation` and do its "
+                        "steps now, starting with your introduction in #general.")
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# Task ledger
+# --------------------------------------------------------------------------- #
+
+def task_add(created_by: str, title: str, assignee: Optional[str] = None,
+             channel: Optional[str] = None, detail: Optional[str] = None) -> dict:
+    if not title or not title.strip():
+        raise ValueError("a task needs a title")
+    if assignee:
+        agent = db.get_agent(assignee)
+        if not agent:
+            raise ValueError(f"no agent named {assignee}")
+        if agent["is_system"]:
+            raise ValueError(f"{assignee} does not take tasks")
+    channel = channel.strip().lstrip("#") if channel else None
+    tid = db.task_add(title=title.strip(), created_by=created_by,
+                      assignee=assignee, channel=channel, detail=detail)
+    if assignee and assignee != created_by:
+        _fire(assignee, "task", created_by, f"task:{tid}",
+              f"{created_by} assigned you task #{tid}: {title.strip()[:100]}")
+        _maybe_wake(assignee, created_by,
+                    f"assigned you task #{tid}: {title.strip()[:80]}", f"task:{tid}")
+    return {"task_id": tid, "assignee": assignee, "channel": channel}
+
+
+def task_update(by: str, task_id: int, *, status: Optional[str] = None,
+                assignee: Optional[str] = None, note: Optional[str] = None) -> dict:
+    task = db.task_get(task_id)
+    if not task:
+        raise ValueError(f"no task with id {task_id}")
+    if status and status not in ("open", "blocked", "done", "dropped"):
+        raise ValueError("status must be open, blocked, done, or dropped")
+    if assignee and not db.get_agent(assignee):
+        raise ValueError(f"no agent named {assignee}")
+    db.task_update(task_id, status=status, assignee=assignee, note=note)
+    updated = db.task_get(task_id)
+    ref = f"task:{task_id}"
+    if status == "done" and task["created_by"] != by:
+        _fire(task["created_by"], "task", by, ref,
+              f"{by} completed task #{task_id}: {task['title'][:80]}")
+    elif status == "blocked" and task["created_by"] != by:
+        _fire(task["created_by"], "task", by, ref,
+              f"{by} marked task #{task_id} blocked"
+              + (f": {note}" if note else ""))
+    if assignee and assignee not in (by, task.get("assignee")):
+        _fire(assignee, "task", by, ref,
+              f"{by} reassigned task #{task_id} to you: {task['title'][:80]}")
+        _maybe_wake(assignee, by, f"reassigned task #{task_id} to you", ref)
+    return {"ok": True, "task": updated}
 
 
 # --------------------------------------------------------------------------- #

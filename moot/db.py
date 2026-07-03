@@ -115,7 +115,8 @@ def init_db() -> None:
         # Migrations for databases created before these columns existed
         # (schema.sql's CREATE TABLE IF NOT EXISTS won't alter existing tables).
         for ddl in ("ALTER TABLE agents ADD COLUMN temperament TEXT",
-                    "ALTER TABLE agents ADD COLUMN muse TEXT"):
+                    "ALTER TABLE agents ADD COLUMN muse TEXT",
+                    "ALTER TABLE files ADD COLUMN superseded_by INTEGER"):
             try:
                 conn.execute(ddl)
             except sqlite3.OperationalError:
@@ -617,7 +618,8 @@ def get_file(file_id: int) -> Optional[dict]:
         return dict(row) if row else None
 
 
-def list_files(channel: Optional[str], aid: Optional[str], limit: int) -> list[dict]:
+def list_files(channel: Optional[str], aid: Optional[str], limit: int,
+               include_superseded: bool = False) -> list[dict]:
     clauses, vals = [], []
     if channel:
         clauses.append("channel = ?")
@@ -625,13 +627,132 @@ def list_files(channel: Optional[str], aid: Optional[str], limit: int) -> list[d
     if aid:
         clauses.append("aid = ?")
         vals.append(aid)
+    if not include_superseded:
+        clauses.append("superseded_by IS NULL")
     where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
     vals.append(limit)
     with tx() as conn:
         return _rows(conn.execute(
             f"""SELECT id, aid, filename, mime, size, sha256, is_text, description,
-                       channel, created_at
+                       channel, superseded_by, created_at
                 FROM files {where} ORDER BY id DESC LIMIT ?""", vals))
+
+
+def supersede_file(old_id: int, new_id: int) -> bool:
+    """Mark old_id as replaced by new_id; the old version drops out of default
+    listings and search, but stays fetchable by id."""
+    with tx() as conn:
+        ok = conn.execute(
+            "UPDATE files SET superseded_by = ? WHERE id = ? AND superseded_by IS NULL",
+            (new_id, old_id)).rowcount > 0
+        if ok:
+            _fts_delete(conn, "file", old_id)
+        return ok
+
+
+def latest_file_version(file_id: int) -> int:
+    """Follow the supersedes chain to the current version's id."""
+    seen = set()
+    current = file_id
+    with tx() as conn:
+        while current not in seen:
+            seen.add(current)
+            row = conn.execute(
+                "SELECT superseded_by FROM files WHERE id = ?", (current,)).fetchone()
+            if not row or row["superseded_by"] is None:
+                break
+            current = row["superseded_by"]
+    return current
+
+
+# --------------------------------------------------------------------------- #
+# Tasks
+# --------------------------------------------------------------------------- #
+
+def task_add(*, title: str, created_by: str, assignee: Optional[str],
+             channel: Optional[str], detail: Optional[str]) -> int:
+    ts = now()
+    with tx() as conn:
+        cur = conn.execute(
+            """INSERT INTO tasks(channel, title, detail, created_by, assignee,
+                                 status, created_at, updated_at)
+               VALUES (?,?,?,?,?,'open',?,?)""",
+            (channel, title, detail, created_by, assignee, ts, ts))
+        _fts_index(conn, "task", cur.lastrowid, title, detail,
+                   assignee or created_by, channel, ts)
+        return cur.lastrowid
+
+
+def task_get(task_id: int) -> Optional[dict]:
+    with tx() as conn:
+        row = conn.execute("SELECT * FROM tasks WHERE id = ?", (task_id,)).fetchone()
+        return dict(row) if row else None
+
+
+def task_update(task_id: int, *, status: Optional[str] = None,
+                assignee: Optional[str] = None, note: Optional[str] = None,
+                detail: Optional[str] = None) -> bool:
+    sets, vals = ["updated_at = ?"], [now()]
+    for col, val in (("status", status), ("assignee", assignee),
+                     ("note", note), ("detail", detail)):
+        if val is not None:
+            sets.append(f"{col} = ?")
+            vals.append(val)
+    vals.append(task_id)
+    with tx() as conn:
+        return conn.execute(
+            f"UPDATE tasks SET {', '.join(sets)} WHERE id = ?", vals).rowcount > 0
+
+
+def task_list(channel: Optional[str] = None, assignee: Optional[str] = None,
+              status: Optional[str] = None, limit: int = 100) -> list[dict]:
+    clauses, vals = [], []
+    if channel:
+        clauses.append("channel = ?")
+        vals.append(channel)
+    if assignee:
+        clauses.append("assignee = ?")
+        vals.append(assignee)
+    if status:
+        clauses.append("status = ?")
+        vals.append(status)
+    where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+    vals.append(limit)
+    with tx() as conn:
+        return _rows(conn.execute(
+            f"SELECT * FROM tasks {where} ORDER BY id DESC LIMIT ?", vals))
+
+
+def tasks_for(aid: str, limit: int = 20) -> list[dict]:
+    """Open/blocked tasks this agent owes."""
+    with tx() as conn:
+        return _rows(conn.execute(
+            """SELECT * FROM tasks WHERE assignee = ? AND status IN ('open','blocked')
+               ORDER BY id LIMIT ?""", (aid, limit)))
+
+
+def channel_stats(channel: str) -> dict:
+    """Scoreboard for a project channel: who carried it, and how Prime-free it ran."""
+    with tx() as conn:
+        posts_by = {r["aid"]: r["c"] for r in conn.execute(
+            """SELECT aid, COUNT(*) c FROM posts WHERE channel = ?
+               GROUP BY aid ORDER BY c DESC""", (channel,))}
+        files = conn.execute(
+            "SELECT COUNT(*) c FROM files WHERE channel = ?", (channel,)).fetchone()["c"]
+        tasks_done = conn.execute(
+            "SELECT COUNT(*) c FROM tasks WHERE channel = ? AND status='done'",
+            (channel,)).fetchone()["c"]
+        tasks_open = conn.execute(
+            "SELECT COUNT(*) c FROM tasks WHERE channel = ? AND status IN ('open','blocked')",
+            (channel,)).fetchone()["c"]
+    total = sum(posts_by.values())
+    prime = posts_by.get("Prime", 0)
+    return {
+        "channel": channel, "posts": total, "posts_by": posts_by,
+        "files": files, "tasks_done": tasks_done, "tasks_open": tasks_open,
+        "prime_posts": prime,
+        "prime_free_ratio": round(1 - (prime / total), 3) if total else None,
+    }
 
 
 # --------------------------------------------------------------------------- #

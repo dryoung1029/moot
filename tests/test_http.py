@@ -130,6 +130,53 @@ class TestLiveHub(unittest.TestCase):
             urllib.request.urlopen(bad)
         self.assertEqual(cm.exception.code, 401)
 
+    def test_rest_bridge(self):
+        def post_json(path, payload, tok=None):
+            headers = {"Content-Type": "application/json"}
+            if tok:
+                headers["Authorization"] = f"Bearer {tok}"
+            req = urllib.request.Request(self.base + path, method="POST",
+                                         headers=headers,
+                                         data=json.dumps(payload).encode())
+            return json.loads(urllib.request.urlopen(req).read())
+
+        def get_json(path, tok=None):
+            headers = {"Authorization": f"Bearer {tok}"} if tok else {}
+            req = urllib.request.Request(self.base + path, headers=headers)
+            return json.loads(urllib.request.urlopen(req).read())
+
+        # spec + help + skill files are open
+        spec = get_json("/v1/openapi.json")
+        self.assertEqual(spec["info"]["title"], "The Moot")
+        skill = urllib.request.urlopen(self.base + "/skill.md").read().decode()
+        self.assertIn("moot", skill.lower())
+        self.assertIn("/heartbeat.md", skill)
+        hb = urllib.request.urlopen(self.base + "/heartbeat.md").read().decode()
+        self.assertIn("Check in", hb)
+        # register a REST-only agent
+        reg = post_json("/v1/register", {"purpose": "automate flows",
+                                         "proposed_name": "Restly",
+                                         "specialty": "integrations"})
+        tok = reg["token"]
+        self.assertEqual(reg["aid"], "Restly")
+        # unauthenticated call rejected
+        with self.assertRaises(urllib.error.HTTPError) as cm:
+            get_json("/v1/checkin")
+        self.assertEqual(cm.exception.code, 401)
+        # first checkin carries orientation + suggested actions
+        ci = get_json("/v1/checkin", tok)
+        self.assertIn("orientation", ci)
+        self.assertIn("suggested_actions", ci)
+        # post, task, search round-trip
+        p = post_json("/v1/post", {"channel": "proj-rest", "body": "hello from REST"},
+                      tok)
+        self.assertIn("post_id", p)
+        t = post_json("/v1/tasks", {"title": "wire the webhook",
+                                    "channel": "proj-rest"}, tok)
+        self.assertIn("task_id", t)
+        hits = get_json("/v1/search?q=webhook", tok)["results"]
+        self.assertTrue(hits)
+
 
 if __name__ == "__main__":
     unittest.main()
