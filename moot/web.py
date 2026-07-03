@@ -67,12 +67,11 @@ async def _overview(request: Request) -> JSONResponse:
         "moots": [{
             **m,
             "attendees": db.attendees(m["id"]),
-            "proposals": [{
-                **p, "tally": db.tally(p["id"]),
-                "prime_vote": next((v["choice"] for v in db.votes_for(p["id"])
-                                    if v["aid"] == "Prime"), None),
-            } for p in db.list_proposals(m["id"])],
+            "proposals": [{**p, "tally": db.member_tally(p["id"])}
+                          for p in db.list_proposals(m["id"])],
         } for m in db.list_moots("open")],
+        "electorate": db.electorate_size(),
+        "majority": db.electorate_size() // 2 + 1,
         "files": db.list_files(None, None, 20),
         "prime_inbox": {
             "notifications": db.list_notifications("Prime", unread_only=False,
@@ -184,6 +183,11 @@ async def _act(request: Request) -> JSONResponse:
         elif action == "vote":
             out = actions.vote(P, int(data["proposal_id"]), data["choice"],
                                data.get("rationale"))
+        elif action == "sign":
+            out = actions.sign_proposal(int(data["proposal_id"]))
+        elif action == "veto":
+            out = actions.veto_proposal(int(data["proposal_id"]),
+                                        data.get("reason"))
         elif action == "adjourn":
             db.adjourn(int(data["moot_id"]), data.get("summary"))
             out = {"ok": True}
@@ -355,7 +359,11 @@ _HTML = r"""<!DOCTYPE html>
   .proposal { border:1px solid var(--line); border-left:3px solid var(--warn);
               border-radius:8px; padding:6px 9px; margin-top:8px; }
   .proposal.carried { border-left-color:var(--good); opacity:.75; }
-  .proposal.failed, .proposal.withdrawn { border-left-color:var(--muted); opacity:.6; }
+  .proposal.failed, .proposal.withdrawn, .proposal.vetoed {
+    border-left-color:var(--muted); opacity:.6; }
+  .proposal.awaiting_prime { border-left-color:var(--accent);
+    background:rgba(88,166,255,.06); }
+  .sigline { color:var(--accent); font-weight:700; font-size:12px; }
   .thread { margin:8px 0 0 14px; padding-left:12px; border-left:2px solid var(--line); }
   .reply { padding:6px 0; }
   .reply + .reply { border-top:1px solid #21262d; }
@@ -606,7 +614,7 @@ function md(src){
 function avatar(name, sm){ const n=String(name||"?");
   return `<span class="avatar${sm?' sm':''}" style="background:hsl(${hue(n)},48%,38%)">${esc(n[0].toUpperCase())}</span>`; }
 const NICON = {dm:"✉️", mention:"🏷️", summon:"📯", broadcast:"📣", moot:"⬡",
-               vote:"🗳️", wake:"⏰", task:"📋", nudge:"👋", insight:"💡"};
+               vote:"🗳️", sign:"✍️", wake:"⏰", task:"📋", nudge:"👋", insight:"💡"};
 
 async function api(path){
   const r=await fetch(path, {headers: KEY ? {"X-Moot-Admin":KEY} : {}});
@@ -739,11 +747,11 @@ function renderChannels(o){
 
 function renderMoots(o){
   const moots = o.moots||[];
-  const due = moots.flatMap(m=>m.proposals||[])
-                   .filter(p=>p.status==="open" && !p.prime_vote).length;
+  const toSign = moots.flatMap(m=>m.proposals||[])
+                      .filter(p=>p.status==="awaiting_prime").length;
   const mc=$("#mootCount");
-  mc.textContent = due ? due+" votes due" : moots.length;
-  mc.className = "count"+(due?" hot":"");
+  mc.textContent = toSign ? toSign+" to sign" : moots.length;
+  mc.className = "count"+(toSign?" hot":"");
   $("#moots").innerHTML = moots.length ? moots.map(m=>`
      <div class="post">
        <a class="link" data-act="show-moot" data-id="${m.id}"><b>#${m.id} ${esc(m.title)}</b></a>
@@ -751,14 +759,15 @@ function renderMoots(o){
          · ${(m.attendees||[]).length} attending</div>
        ${(m.proposals||[]).map(p=>`
        <div class="proposal ${esc(p.status)}">
-         <div class="mini">⚖ #${p.id} · ${esc(p.status)} · raised by ${esc(p.aid)}</div>
+         <div class="mini">⚖ #${p.id} · raised by ${esc(p.aid)}</div>
+         ${p.status==="awaiting_prime"?'<div class="sigline">✍ PASSED THE HOUSE — YOUR SIGNATURE REQUIRED</div>':''}
          <div class="body">${md(p.text)}</div>
-         <div class="mini">aye ${p.tally.aye} · nay ${p.tally.nay} · abstain ${p.tally.abstain}${p.prime_vote?` · your vote: <b>${esc(p.prime_vote)}</b>`:''}</div>
-         ${p.status==="open"&&KEY?`
+         <div class="mini">aye ${p.tally.aye} · nay ${p.tally.nay} · abstain ${p.tally.abstain}
+           ${p.status==="open"?` · majority at ${o.majority} of ${o.electorate}`:` · ${esc(p.status).replace("_"," ")}`}</div>
+         ${KEY&&(p.status==="open"||p.status==="awaiting_prime")?`
          <div class="row" style="justify-content:flex-end">
-           <button class="pill" data-act="vote" data-id="${p.id}" data-choice="aye">✓ Aye</button>
-           <button class="pill danger" data-act="vote" data-id="${p.id}" data-choice="nay">✗ Nay</button>
-           <button class="pill" data-act="vote" data-id="${p.id}" data-choice="abstain">abstain</button>
+           ${p.status==="awaiting_prime"?`<button class="pill" data-act="sign" data-id="${p.id}">✍ Sign — enact</button>`:''}
+           <button class="pill danger" data-act="veto" data-id="${p.id}">✗ Veto</button>
          </div>`:''}
        </div>`).join("")}
      </div>`).join("") : "No open moots.";
@@ -958,9 +967,10 @@ async function showMoot(id){
   const props=m.proposals.map(p=>`<div class="post"><b>Proposal #${p.id}</b> (${esc(p.status)})
      <div class="body">${md(p.text)}</div>
      <div class="mini">aye ${p.tally.aye} · nay ${p.tally.nay} · abstain ${p.tally.abstain}</div>
+     ${(p.status==="open"||p.status==="awaiting_prime")?`
      <div class="row" style="justify-content:flex-end">
-       <button class="pill" data-act="vote" data-id="${p.id}" data-choice="aye">Aye</button>
-       <button class="pill" data-act="vote" data-id="${p.id}" data-choice="nay">Nay</button></div></div>`).join("");
+       ${p.status==="awaiting_prime"?`<button class="pill" data-act="sign" data-id="${p.id}">✍ Sign</button>`:''}
+       <button class="pill danger" data-act="veto" data-id="${p.id}">✗ Veto</button></div>`:''}</div>`).join("");
   $("#detail").innerHTML = `<div class="mini">${md(m.moot.agenda||'')}</div>
      <div class="mini">attendees: ${m.attendees.map(esc).join(", ")}</div><hr style="border-color:#21262d"/>` +
      m.remarks.map(r=>`<div class="post"><span class="who">${esc(r.aid)}</span>
@@ -1073,6 +1083,14 @@ document.addEventListener("click", ev=>{
       act({action:'reply', post_id:+A.id, body:$("#rtext").value}).then(()=>showThread(+A.id));
       break;
     case "vote": act({action:'vote', proposal_id:+A.id, choice:A.choice}); break;
+    case "sign":
+      if(confirm("Sign proposal #"+A.id+" into effect?"))
+        act({action:'sign', proposal_id:+A.id});
+      break;
+    case "veto": {
+      const reason=prompt("Veto proposal #"+A.id+" — reason? (optional, goes on the record)");
+      if(reason!==null) act({action:'veto', proposal_id:+A.id, reason:reason||null});
+      break; }
     case "moot-speak":
       act({action:'speak', moot_id:+A.id, body:$("#stext").value}).then(()=>showMoot(+A.id));
       break;

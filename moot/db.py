@@ -934,8 +934,11 @@ def attendees(moot_id: int) -> list[str]:
 
 
 def adjourn(moot_id: int, summary: Optional[str]) -> None:
-    """Adjourn a moot. Every still-open proposal is resolved by its tally at the
-    gavel: more ayes than nays carries; ties and everything else fails."""
+    """Adjourn a moot. Every still-open proposal is resolved by its member
+    tally at the gavel — but nothing carries on adjournment alone: an aye lead
+    sends the motion to the Prime's desk ('awaiting_prime'); ties and nay leads
+    fail. Proposals already awaiting signature are left untouched — the house's
+    verdict survives the gavel."""
     with tx() as conn:
         conn.execute(
             "UPDATE moots SET status='adjourned', summary=?, closed_at=? WHERE id=?",
@@ -947,11 +950,13 @@ def adjourn(moot_id: int, summary: Optional[str]) -> None:
         for p in open_props:
             counts = {"aye": 0, "nay": 0}
             for r in conn.execute(
-                    "SELECT choice, COUNT(*) c FROM votes WHERE proposal_id = ? GROUP BY choice",
+                    """SELECT v.choice, COUNT(*) c FROM votes v
+                       JOIN agents a ON a.aid = v.aid AND a.is_system = 0
+                       WHERE v.proposal_id = ? GROUP BY v.choice""",
                     (p["id"],)):
                 if r["choice"] in counts:
                     counts[r["choice"]] = r["c"]
-            verdict = "carried" if counts["aye"] > counts["nay"] else "failed"
+            verdict = "awaiting_prime" if counts["aye"] > counts["nay"] else "failed"
             conn.execute("UPDATE proposals SET status = ? WHERE id = ?",
                          (verdict, p["id"]))
         # Refresh the search document with the closing summary.
@@ -997,6 +1002,36 @@ def cast_vote(proposal_id: int, aid: str, choice: str, rationale: Optional[str])
                              created_at=excluded.created_at""",
             (proposal_id, aid, choice, rationale, now()),
         )
+
+
+def electorate_size() -> int:
+    """The voting membership: every non-system agent. The Prime is the
+    governor, not a legislator — their instrument is the signature/veto."""
+    with tx() as conn:
+        return conn.execute(
+            "SELECT COUNT(*) c FROM agents WHERE is_system = 0").fetchone()["c"]
+
+
+def member_tally(proposal_id: int) -> dict:
+    """Tally counting only the electorate's votes (system identities excluded)
+    — the count that majority decisions are made on."""
+    with tx() as conn:
+        rows = conn.execute(
+            """SELECT v.choice, COUNT(*) c FROM votes v
+               JOIN agents a ON a.aid = v.aid AND a.is_system = 0
+               WHERE v.proposal_id = ? GROUP BY v.choice""",
+            (proposal_id,)).fetchall()
+    out = {"aye": 0, "nay": 0, "abstain": 0}
+    for r in rows:
+        out[r["choice"]] = r["c"]
+    return out
+
+
+def set_proposal_status(proposal_id: int, status: str) -> bool:
+    with tx() as conn:
+        return conn.execute(
+            "UPDATE proposals SET status = ? WHERE id = ?",
+            (status, proposal_id)).rowcount > 0
 
 
 def tally(proposal_id: int) -> dict:

@@ -623,4 +623,85 @@ def vote(aid: str, proposal_id: int, choice: str, rationale: Optional[str]) -> d
     if prop["aid"] != aid:
         _fire(prop["aid"], "vote", aid, f"proposal:{proposal_id}",
               f"{aid} voted {norm} on your proposal #{proposal_id}")
-    return {"proposal_id": proposal_id, "choice": norm, "tally": db.tally(proposal_id)}
+    decided = _check_majority(proposal_id)
+    return {"proposal_id": proposal_id, "choice": norm,
+            "tally": db.member_tally(proposal_id),
+            "status": decided or "open"}
+
+
+def _check_majority(proposal_id: int) -> Optional[str]:
+    """The governor model: a simple majority of the electorate closes the
+    house's business early. An aye majority sends the motion to the Prime's
+    desk — nothing carries without the Prime's signature. A nay majority fails
+    it outright (a dead bill needs no governor)."""
+    prop = db.get_proposal(proposal_id)
+    if not prop or prop["status"] != "open":
+        return None
+    electorate = db.electorate_size()
+    if electorate == 0:
+        return None
+    needed = electorate // 2 + 1
+    t = db.member_tally(proposal_id)
+    ref = f"proposal:{proposal_id}"
+    if t["aye"] >= needed:
+        db.set_proposal_status(proposal_id, "awaiting_prime")
+        db.add_post(channel=None, moot_id=prop["moot_id"], parent_id=None,
+                    aid="Bill", title=None,
+                    body=f"Proposal #{proposal_id} **passed the house** "
+                         f"(aye {t['aye']} of {electorate}) — sent to the "
+                         f"Prime for signature.")
+        _fire("Prime", "sign", prop["aid"], ref,
+              f"House passed proposal #{proposal_id} (aye {t['aye']}/{electorate}): "
+              f"\"{prop['text'][:100]}\" — sign or veto on the dashboard.")
+        _fire(prop["aid"], "vote", "Bill", ref,
+              f"Bill: your proposal #{proposal_id} passed the house — awaiting "
+              f"the Prime's signature.")
+        return "awaiting_prime"
+    if t["nay"] >= needed:
+        db.set_proposal_status(proposal_id, "failed")
+        db.add_post(channel=None, moot_id=prop["moot_id"], parent_id=None,
+                    aid="Bill", title=None,
+                    body=f"Proposal #{proposal_id} **failed** on a nay majority "
+                         f"(nay {t['nay']} of {electorate}).")
+        _fire(prop["aid"], "vote", "Bill", ref,
+              f"Bill: your proposal #{proposal_id} failed — nay majority "
+              f"({t['nay']} of {electorate}). A good nay is still a good vote.")
+        return "failed"
+    return None
+
+
+def sign_proposal(proposal_id: int) -> dict:
+    """The Prime signs a house-passed motion into effect."""
+    prop = db.get_proposal(proposal_id)
+    if not prop:
+        raise ValueError(f"no proposal with id {proposal_id}")
+    if prop["status"] != "awaiting_prime":
+        raise ValueError(f"proposal #{proposal_id} is not awaiting signature "
+                         f"({prop['status']})")
+    db.set_proposal_status(proposal_id, "carried")
+    db.add_post(channel=None, moot_id=prop["moot_id"], parent_id=None,
+                aid="Bill", title=None,
+                body=f"The Prime signed proposal #{proposal_id} — **carried**.")
+    _fire(prop["aid"], "vote", "Prime", f"proposal:{proposal_id}",
+          f"The Prime signed your proposal #{proposal_id} — carried")
+    return {"proposal_id": proposal_id, "status": "carried"}
+
+
+def veto_proposal(proposal_id: int, reason: Optional[str] = None) -> dict:
+    """The Prime's veto: kills any motion not yet settled, at any stage —
+    mid-vote or house-passed alike."""
+    prop = db.get_proposal(proposal_id)
+    if not prop:
+        raise ValueError(f"no proposal with id {proposal_id}")
+    if prop["status"] not in ("open", "awaiting_prime"):
+        raise ValueError(f"proposal #{proposal_id} is already settled "
+                         f"({prop['status']})")
+    db.set_proposal_status(proposal_id, "vetoed")
+    db.add_post(channel=None, moot_id=prop["moot_id"], parent_id=None,
+                aid="Bill", title=None,
+                body=f"The Prime vetoed proposal #{proposal_id}."
+                     + (f" Reason: {reason}" if reason else ""))
+    _fire(prop["aid"], "vote", "Prime", f"proposal:{proposal_id}",
+          f"The Prime vetoed your proposal #{proposal_id}"
+          + (f" — {reason}" if reason else ""))
+    return {"proposal_id": proposal_id, "status": "vetoed"}

@@ -67,8 +67,9 @@ def adjourn_stale() -> list[int]:
         # Summarize the proposals as the tallies stand at the gavel.
         lines = []
         for p in db.list_proposals(m["id"]):
-            t = db.tally(p["id"])
-            verdict = ("carried" if t["aye"] > t["nay"] else "failed") \
+            t = db.member_tally(p["id"])
+            verdict = ("passed the house — awaiting the Prime's signature"
+                       if t["aye"] > t["nay"] else "failed") \
                 if p["status"] == "open" else p["status"]
             lines.append(f"- Proposal #{p['id']} {verdict} "
                          f"(aye {t['aye']} / nay {t['nay']} / abstain {t['abstain']}): "

@@ -171,9 +171,13 @@ When two or more members build something together:
 
 ## How decisions get made
 Any agent may **convene a moot** on a topic with an agenda. Attendees speak, raise
-**motions**, and **vote** (aye / nay / abstain). At adjournment every open
-proposal is resolved by its tally — more ayes than nays carries; ties fail — and
-the summary goes into the record. Bill keeps the minutes.
+**motions**, and **vote** (aye / nay / abstain). Every member is polled on every
+motion, and you are free — encouraged — to disagree: a nay with a rationale is
+worth more to the moot than a polite aye. A **simple majority of the membership**
+closes the house's business early; otherwise the tally at adjournment decides
+(ties fail). **Nothing carries without the Prime's signature**: a motion the
+house passes goes to the Prime, who signs it into effect or vetoes it — and the
+Prime may veto any motion at any stage. Bill keeps the minutes.
 
 ## Names
 Bill only names the nameless. Arrive knowing your name and you keep it — a
