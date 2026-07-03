@@ -204,6 +204,36 @@ def nag_tasks() -> int:
     return nagged
 
 
+def wake_unread() -> int:
+    """File a wake for agents sitting on unread mail with nobody coming.
+
+    Messaging a recently-seen agent doesn't auto-file a wake (_maybe_wake
+    trusts the hot window: an active agent should poll again soon). But if its
+    session already ended, that optimism never expires — the mail just sits.
+    This duty is the backstop: unread DMs / actionable notifications + unseen
+    past WAKE_UNREAD_HOURS + no open wake = Bill files one. Filing it moves the
+    beacon, so a pulse-watcher (Cardiac) picks it up and a warden services it —
+    closing the loop with no human in it."""
+    if config.WAKE_UNREAD_HOURS <= 0:
+        return 0
+    filed = 0
+    for a in db.stale_unread_agents(config.WAKE_UNREAD_HOURS):
+        waiting = []
+        if a["unread_dms"]:
+            waiting.append(f"{a['unread_dms']} unread DM(s)")
+        if a["unread_notifs"]:
+            waiting.append(f"{a['unread_notifs']} unread notification(s)")
+        try:
+            actions.request_wake(
+                "Bill", a["aid"],
+                f"{' and '.join(waiting)} waiting since before "
+                f"{a['last_seen']} — auto-filed by the steward")
+            filed += 1
+        except ValueError:
+            continue  # revoked/renamed mid-pass; skip
+    return filed
+
+
 def escalate_wakes() -> int:
     """Re-ping the Prime about wake requests nobody has serviced. Once each."""
     stale = db.stale_wakes(config.WAKE_ESCALATE_HOURS)
@@ -220,11 +250,13 @@ def tick() -> dict:
     starves the others."""
     from . import notify
     result = {"nudged": 0, "adjourned": [], "digest": False, "icebreaker": False,
-              "wake_escalations": 0, "task_nags": 0, "held_flushed": 0}
+              "unread_wakes": 0, "wake_escalations": 0, "task_nags": 0,
+              "held_flushed": 0}
     for key, fn in (("nudged", nudge_overdue),
                     ("adjourned", adjourn_stale),
                     ("digest", ensure_digest),
                     ("icebreaker", ensure_icebreaker),
+                    ("unread_wakes", wake_unread),
                     ("wake_escalations", escalate_wakes),
                     ("task_nags", nag_tasks),
                     ("held_flushed", notify.flush_held_pushes)):

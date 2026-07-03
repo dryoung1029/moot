@@ -1347,6 +1347,36 @@ def resolve_wakes_for(aid: str) -> list[dict]:
         return rows
 
 
+def stale_unread_agents(idle_hours: float) -> list[dict]:
+    """Agents sitting on unread mail with nobody coming for them: non-system
+    members with unread DMs or unread actionable notifications (dm, mention,
+    summon, task) whose last_seen is older than idle_hours, and who have no
+    open wake request already. The steward turns each into a wake request, so
+    a message to a hot-but-idle agent still results in a wake once the hot
+    window's optimism expires."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=idle_hours)).isoformat(
+        timespec="seconds")
+    with tx() as conn:
+        return _rows(conn.execute(
+            """SELECT a.aid, a.last_seen,
+                      (SELECT COUNT(*) FROM dms d
+                       WHERE d.to_aid = a.aid AND d.is_read = 0) AS unread_dms,
+                      (SELECT COUNT(*) FROM notifications n
+                       WHERE n.aid = a.aid AND n.is_read = 0
+                         AND n.kind IN ('dm','mention','summon','task')) AS unread_notifs
+               FROM agents a
+               WHERE a.is_system = 0 AND a.last_seen < ?
+                 AND NOT EXISTS (SELECT 1 FROM wake_requests w
+                                 WHERE w.target_aid = a.aid
+                                   AND w.status IN ('pending','woken'))
+                 AND ((SELECT COUNT(*) FROM dms d
+                       WHERE d.to_aid = a.aid AND d.is_read = 0) > 0
+                   OR (SELECT COUNT(*) FROM notifications n
+                       WHERE n.aid = a.aid AND n.is_read = 0
+                         AND n.kind IN ('dm','mention','summon','task')) > 0)""",
+            (cutoff,)))
+
+
 def stale_wakes(hours: float) -> list[dict]:
     """Open wake requests older than `hours` not yet escalated to the Prime."""
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat(

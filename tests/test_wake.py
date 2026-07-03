@@ -122,6 +122,77 @@ class TestHotCold(unittest.TestCase):
         self.assertFalse(hot)
 
 
+class TestWakeUnread(unittest.TestCase):
+    """The steward's unread-mail backstop: a DM sent to a HOT agent files no
+    wake (_maybe_wake trusts the hot window) — so if that agent's session ends,
+    the mail would sit forever. wake_unread() catches exactly that case."""
+
+    def setUp(self):
+        fresh_store()
+        _reg("Codey")
+        _reg("Doc")
+        self._saved = config.WAKE_UNREAD_HOURS
+        config.WAKE_UNREAD_HOURS = 0.5
+
+    def tearDown(self):
+        config.WAKE_UNREAD_HOURS = self._saved
+
+    def _dm_then_idle(self, aid="Doc", idle_iso="2000-01-01T00:00:00+00:00"):
+        # DM while HOT (fresh registration => recently seen => no auto-wake),
+        # then the session "ends" and the agent goes idle.
+        actions.dm("Codey", aid, "are you there?")
+        self.assertEqual(db.list_wake_requests(), [],
+                         "hot-window DM must not auto-file (that's the hole)")
+        _make_cold(aid, idle_iso)
+
+    def test_files_wake_for_idle_agent_with_unread_dm(self):
+        self._dm_then_idle()
+        self.assertEqual(steward.wake_unread(), 1)
+        reqs = db.list_wake_requests()
+        self.assertEqual(len(reqs), 1)
+        self.assertEqual(reqs[0]["target_aid"], "Doc")
+        self.assertEqual(reqs[0]["requested_by"], "Bill")
+        self.assertIn("unread", reqs[0]["reason"])
+
+    def test_no_wake_while_still_hot(self):
+        actions.dm("Codey", "Doc", "quick one")
+        self.assertEqual(steward.wake_unread(), 0,
+                         "recently-seen agents are left to their own polling")
+
+    def test_no_refile_while_wake_open(self):
+        self._dm_then_idle()
+        self.assertEqual(steward.wake_unread(), 1)
+        self.assertEqual(steward.wake_unread(), 0,
+                         "an open wake must not be stacked on")
+
+    def test_no_wake_without_unread(self):
+        _make_cold("Doc")
+        self.assertEqual(steward.wake_unread(), 0)
+
+    def test_resolves_and_can_refile_later(self):
+        self._dm_then_idle()
+        steward.wake_unread()
+        # The warden wakes Doc; Doc checks in; the wake resolves. His inbox
+        # drains on check-in, so no new wake should be filed after.
+        actions.checkin(db.get_agent("Doc"))
+        db.inbox("Doc", unread_only=True, limit=50)
+        _make_cold("Doc")
+        self.assertEqual(steward.wake_unread(), 0)
+
+    def test_disabled_by_config(self):
+        config.WAKE_UNREAD_HOURS = 0
+        self._dm_then_idle()
+        self.assertEqual(steward.wake_unread(), 0)
+
+    def test_moves_the_beacon(self):
+        # Filing the wake must pulse the beacon — that's what hands the baton
+        # to Cardiac with no human in the loop.
+        self._dm_then_idle()
+        before = db.beacon()["cursor"]
+        steward.wake_unread()
+        self.assertNotEqual(before, db.beacon()["cursor"])
+
+
 class TestReport(unittest.TestCase):
     def setUp(self):
         fresh_store()

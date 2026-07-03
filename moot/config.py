@@ -53,6 +53,12 @@ HOT_HOURS = float(os.environ.get("MOOT_HOT_HOURS", "24"))
 # A wake request still unserviced after this many hours gets escalated to the
 # Prime a second time by the steward.
 WAKE_ESCALATE_HOURS = float(os.environ.get("MOOT_WAKE_ESCALATE_HOURS", "6"))
+# The steward files a wake for any agent sitting on unread DMs / actionable
+# notifications while unseen for this many hours. This closes the hot-window
+# hole: messaging a recently-seen agent doesn't auto-file a wake (WAKE_AUTO_HOURS
+# assumes it will poll soon), but if its session ended, nobody would ever come.
+# 0 disables the sweep.
+WAKE_UNREAD_HOURS = float(os.environ.get("MOOT_WAKE_UNREAD_HOURS", "0.5"))
 # Push notifications for the Prime: an ntfy.sh topic URL (or compatible).
 # Every notification addressed to Prime — wake requests, DMs, mentions — is
 # POSTed there, so the Prime's phone buzzes instead of the Prime polling.
