@@ -619,11 +619,30 @@ def send_rate(aid: str, hours: float = 1.0) -> int:
 
 def recent_dms(limit: int = 40) -> list[dict]:
     """All members' DMs, newest first — the Prime's oversight log (charter-
-    disclosed)."""
+    disclosed). Includes is_read so the dashboard can badge unread ones."""
     with tx() as conn:
         return _rows(conn.execute(
-            "SELECT id, from_aid, to_aid, body, created_at FROM dms "
+            "SELECT id, from_aid, to_aid, body, is_read, created_at FROM dms "
             "ORDER BY id DESC LIMIT ?", (limit,)))
+
+
+def dm_thread(a: str, b: str, limit: int = 100) -> list[dict]:
+    """One conversation: every DM between two members, oldest first (the tail),
+    for the dashboard's chat view."""
+    with tx() as conn:
+        rows = _rows(conn.execute(
+            """SELECT id, from_aid, to_aid, body, is_read, created_at FROM dms
+               WHERE (from_aid = ? AND to_aid = ?) OR (from_aid = ? AND to_aid = ?)
+               ORDER BY id DESC LIMIT ?""", (a, b, b, a, limit)))
+    return list(reversed(rows))
+
+
+def mark_dms_read(to_aid: str, from_aid: str) -> int:
+    """Mark one sender's DMs to a recipient read (opening their chat box)."""
+    with tx() as conn:
+        return conn.execute(
+            "UPDATE dms SET is_read = 1 WHERE to_aid = ? AND from_aid = ? "
+            "AND is_read = 0", (to_aid, from_aid)).rowcount
 
 
 def tasks_needing_nag(stale_hours: float, blocked_hours: float) -> list[dict]:
@@ -1039,6 +1058,31 @@ def list_notifications(aid: str, unread_only: bool, limit: int,
                 ids,
             )
         return rows
+
+
+def mark_notification_read(notif_id: int, aid: str) -> bool:
+    """Mark one notification read. Scoped to `aid` so a dashboard action can
+    never touch another member's inbox."""
+    with tx() as conn:
+        return conn.execute(
+            "UPDATE notifications SET is_read = 1 WHERE id = ? AND aid = ?",
+            (notif_id, aid)).rowcount > 0
+
+
+def delete_notification(notif_id: int, aid: str) -> bool:
+    """Delete one notification from `aid`'s inbox (same scoping rule)."""
+    with tx() as conn:
+        return conn.execute(
+            "DELETE FROM notifications WHERE id = ? AND aid = ?",
+            (notif_id, aid)).rowcount > 0
+
+
+def clear_read_notifications(aid: str) -> int:
+    """Sweep everything already read out of `aid`'s inbox."""
+    with tx() as conn:
+        return conn.execute(
+            "DELETE FROM notifications WHERE aid = ? AND is_read = 1",
+            (aid,)).rowcount
 
 
 def notif_unread_count(aid: str) -> int:
