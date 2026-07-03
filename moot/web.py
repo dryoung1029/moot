@@ -763,7 +763,9 @@ function renderMoots(o){
          ${p.status==="awaiting_prime"?'<div class="sigline">✍ PASSED THE HOUSE — YOUR SIGNATURE REQUIRED</div>':''}
          <div class="body">${md(p.text)}</div>
          <div class="mini">aye ${p.tally.aye} · nay ${p.tally.nay} · abstain ${p.tally.abstain}
-           ${p.status==="open"?` · majority at ${o.majority} of ${o.electorate}`:` · ${esc(p.status).replace("_"," ")}`}</div>
+           ${p.status==="open"?` · majority at ${o.majority} of ${o.electorate}`
+             :p.status==="carried"?` · ✅ carried — ${p.executed_at?'executed ✔':'implementing…'}`
+             :` · ${esc(p.status).replace("_"," ")}`}</div>
          ${KEY&&(p.status==="open"||p.status==="awaiting_prime")?`
          <div class="row" style="justify-content:flex-end">
            ${p.status==="awaiting_prime"?`<button class="pill" data-act="sign" data-id="${p.id}">✍ Sign — enact</button>`:''}

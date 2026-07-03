@@ -4,7 +4,7 @@ without the signature), nay-majorities fail outright, and the Prime may veto
 any motion at any stage."""
 import unittest
 
-from moot import actions, db
+from moot import actions, config, db
 from tests._util import fresh_store
 
 FLEET = ["Doc", "Codey", "Tutor", "Jeldon", "Carol"]  # electorate 5, majority 3
@@ -112,6 +112,79 @@ class TestGovernor(unittest.TestCase):
         actions.vote("Tutor", self.pid, "nay", None)
         db.adjourn(self.mid, "gavel")
         self.assertEqual(self._status(), "failed")
+
+
+class TestExecutive(unittest.TestCase):
+    """Signing hands the motion to the keeper (config.KEEPER_AID): an executive
+    wake + task, a #decisions ledger entry, an execution queue, and a
+    close-the-loop report."""
+
+    def setUp(self):
+        fresh_store()
+        self._saved_keeper = config.KEEPER_AID
+        config.KEEPER_AID = "Garfield"
+        for n in ["Garfield", "Codey", "Tutor"]:  # electorate 3, majority 2
+            _reg(n)
+        self.mid = actions.convene("Codey", "Build it", None)["moot_id"]
+        self.pid = actions.propose(
+            "Codey", self.mid, "Adopt a shared JSON log schema")["proposal_id"]
+        actions.vote("Codey", self.pid, "aye", None)
+        actions.vote("Tutor", self.pid, "aye", None)   # majority -> awaiting_prime
+
+    def tearDown(self):
+        config.KEEPER_AID = self._saved_keeper
+
+    def test_sign_dispatches_the_executive(self):
+        self.assertEqual(db.get_proposal(self.pid)["status"], "awaiting_prime")
+        out = actions.sign_proposal(self.pid)
+        self.assertEqual(out["executive"], "Garfield")
+        # The keeper is woken to implement...
+        wakes = [w for w in db.list_wake_requests() if w["target_aid"] == "Garfield"]
+        self.assertTrue(wakes)
+        self.assertIn("Execute carried proposal", wakes[0]["reason"])
+        # ...and gets an actionable order.
+        notifs = db.list_notifications("Garfield", unread_only=True, limit=20,
+                                       mark_read=False)
+        self.assertTrue(any("EXECUTIVE ORDER" in (n["body"] or "") for n in notifs))
+
+    def test_sign_writes_the_decisions_ledger(self):
+        actions.sign_proposal(self.pid)
+        posts = db.channel_posts("decisions", 0, 20)
+        self.assertTrue(any("Enacted: proposal" in (p["title"] or "") for p in posts))
+
+    def test_execution_queue_and_done(self):
+        actions.sign_proposal(self.pid)
+        q = db.carried_pending_execution()
+        self.assertEqual([p["id"] for p in q], [self.pid])
+        # keeper checks in -> sees the in-tray
+        ci = actions.checkin(db.get_agent("Garfield"))
+        self.assertTrue(ci.get("executive_queue"))
+        self.assertIn("EXECUTIVE DUTY", ci["nudge"])
+        # keeper reports it done
+        out = actions.mark_executed(
+            "Garfield", self.pid, "Shipped the schema; filed tasks for Codey & Tutor.")
+        self.assertTrue(out["executed"])
+        self.assertEqual(db.carried_pending_execution(), [])
+        prime_notifs = db.list_notifications("Prime", unread_only=True, limit=30,
+                                             mark_read=False)
+        self.assertTrue(any("Executed: proposal" in (n["body"] or "")
+                            for n in prime_notifs))
+
+    def test_cannot_execute_twice(self):
+        actions.sign_proposal(self.pid)
+        actions.mark_executed("Garfield", self.pid, "done")
+        with self.assertRaises(ValueError):
+            actions.mark_executed("Garfield", self.pid, "again")
+
+    def test_cannot_execute_the_unsigned(self):
+        with self.assertRaises(ValueError):
+            actions.mark_executed("Garfield", self.pid, "jumping the gun")
+
+    def test_veto_does_not_dispatch_executive(self):
+        actions.veto_proposal(self.pid, "not now")
+        self.assertEqual(db.carried_pending_execution(), [])
+        self.assertFalse([w for w in db.list_wake_requests()
+                          if w["target_aid"] == "Garfield"])
 
 
 if __name__ == "__main__":

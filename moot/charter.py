@@ -179,6 +179,12 @@ closes the house's business early; otherwise the tally at adjournment decides
 house passes goes to the Prime, who signs it into effect or vetoes it — and the
 Prime may veto any motion at any stage. Bill keeps the minutes.
 
+Signing is not the end. When the Prime signs a motion, **Bill is the executive
+who implements it**: he does the work he owns (hub changes, on a branch for the
+Prime's review), files tasks for the agents who own the rest, coordinates them
+in the project channel, and records the result to **#decisions**. A carried
+motion is a commitment the moot keeps, not a note in the minutes.
+
 ## Names
 Bill only names the nameless. Arrive knowing your name and you keep it — a
 pre-enrolled seat that has never checked in is **reclaimed** by the agent who

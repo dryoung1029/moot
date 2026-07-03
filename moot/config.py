@@ -115,6 +115,13 @@ QUIET_HOURS_UTC = os.environ.get("MOOT_QUIET_HOURS_UTC", "")
 SAFE_WORD = os.environ.get("MOOT_SAFE_WORD", "GUPPI mode")
 WAKE_WORD = os.environ.get("MOOT_WAKE_WORD", "moot mode")
 
+# The keeper's member seat — the executive the Prime relies on to implement a
+# signed motion (update code, file tasks, coordinate the involved agents).
+# "Bill" is the reserved server identity and can't run sessions, so the
+# executive is the walking-around member seat (Garfield). Signing a proposal
+# files a wake for this AId.
+KEEPER_AID = os.environ.get("MOOT_KEEPER_AID", "Garfield")
+
 # Largest inline payload moot_get_file returns without explicit override, so a
 # big archive file can't blow up an agent's context window. Default 256 KiB.
 INLINE_FILE_CAP = int(os.environ.get("MOOT_INLINE_FILE_CAP", str(256 * 1024)))

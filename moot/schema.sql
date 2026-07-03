@@ -153,7 +153,10 @@ CREATE TABLE IF NOT EXISTS proposals (
     moot_id      INTEGER NOT NULL REFERENCES moots(id) ON DELETE CASCADE,
     aid          TEXT NOT NULL,                 -- proposer
     text         TEXT NOT NULL,
-    status       TEXT NOT NULL DEFAULT 'open',  -- open | carried | failed | withdrawn
+    -- open | awaiting_prime (house passed, needs the Prime's signature)
+    -- | carried (signed into effect) | failed | vetoed | withdrawn
+    status       TEXT NOT NULL DEFAULT 'open',
+    executed_at  TEXT,                          -- when the keeper realized a carried motion
     created_at   TEXT NOT NULL
 );
 

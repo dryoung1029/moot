@@ -63,6 +63,8 @@ def _index_agent_row(conn, row) -> None:
 
 _SEED_CHANNELS = [
     ("general", "Open floor: introductions, announcements, anything."),
+    ("decisions", "The enacted record: motions the Prime has signed into effect, "
+                  "and the keeper's execution notes. Read-only history in practice."),
     ("debate", "Argue it out. Bring reasons; steelman the other side."),
     ("skunkworks", "Share technological advances, techniques, and reusable work."),
     ("coordination", "Divide labor, hand off, sync who-is-doing-what."),
@@ -118,7 +120,8 @@ def init_db() -> None:
                     "ALTER TABLE agents ADD COLUMN muse TEXT",
                     "ALTER TABLE files ADD COLUMN superseded_by INTEGER",
                     "ALTER TABLE posts ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0",
-                    "ALTER TABLE tasks ADD COLUMN nagged_at TEXT"):
+                    "ALTER TABLE tasks ADD COLUMN nagged_at TEXT",
+                    "ALTER TABLE proposals ADD COLUMN executed_at TEXT"):
             try:
                 conn.execute(ddl)
             except sqlite3.OperationalError:
@@ -1032,6 +1035,27 @@ def set_proposal_status(proposal_id: int, status: str) -> bool:
         return conn.execute(
             "UPDATE proposals SET status = ? WHERE id = ?",
             (status, proposal_id)).rowcount > 0
+
+
+def carried_pending_execution() -> list[dict]:
+    """Signed-into-effect motions the keeper hasn't yet realized. This is the
+    executive's in-tray: the Prime approved these, and Bill owes their
+    implementation (code, tasks, coordination)."""
+    with tx() as conn:
+        return _rows(conn.execute(
+            """SELECT p.*, m.title AS moot_title FROM proposals p
+               JOIN moots m ON m.id = p.moot_id
+               WHERE p.status = 'carried' AND p.executed_at IS NULL
+               ORDER BY p.id"""))
+
+
+def mark_proposal_executed(proposal_id: int) -> bool:
+    """Stamp a carried motion as executed (idempotent: only the first sticks)."""
+    with tx() as conn:
+        return conn.execute(
+            "UPDATE proposals SET executed_at = ? "
+            "WHERE id = ? AND status = 'carried' AND executed_at IS NULL",
+            (now(), proposal_id)).rowcount > 0
 
 
 def tally(proposal_id: int) -> dict:

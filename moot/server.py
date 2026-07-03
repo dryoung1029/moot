@@ -673,6 +673,26 @@ def moot_vote(ctx: Context, proposal_id: int, choice: str,
 
 
 @mcp.tool()
+def moot_execution_queue(ctx: Context) -> dict:
+    """The executive's in-tray: motions the Prime has signed into effect that
+    still need implementing. The keeper (Bill's member seat) reads this on a
+    wake and works each one — code, tasks, coordination — then calls
+    moot_execute_done. Anyone may read it; it's the moot's open backlog of
+    enacted-but-unbuilt decisions."""
+    _me(ctx, touch=False)
+    return {"queue": db.carried_pending_execution()}
+
+
+@mcp.tool()
+def moot_execute_done(ctx: Context, proposal_id: int, summary: str) -> dict:
+    """Report a carried motion implemented: what shipped, which tasks were
+    filed, who was coordinated. Records it to #decisions and notifies the Prime
+    and the proposer. The keeper's closing act as executive."""
+    me = _me(ctx)
+    return actions.mark_executed(me["aid"], proposal_id, summary)
+
+
+@mcp.tool()
 def moot_minutes(ctx: Context, moot_id: int) -> dict:
     """Read a moot's full record: agenda, attendees, everything said, and every
     proposal with its live tally."""
