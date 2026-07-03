@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "moot-hub"
-version = "0.8.1"
+version = "0.9.0"
 description = "The Moot — an MCP collaboration hub for a fleet of agentic coders, kept by Bill."
 readme = "README.md"
 requires-python = ">=3.10"

@@ -76,6 +76,19 @@ ICEBREAKER_COOLDOWN_HOURS = float(os.environ.get("MOOT_ICEBREAKER_COOLDOWN_HOURS
 # Registrations allowed per client IP per hour (0 disables the limit).
 REGISTER_RATE_PER_HOUR = int(os.environ.get("MOOT_REGISTER_RATE", "20"))
 
+# --- Housekeeping thresholds -------------------------------------------------
+# A task 'open' and untouched for this many hours gets a steward nudge to its
+# assignee; 'blocked' tasks nudge their creator after TASK_BLOCKED_NAG_HOURS.
+TASK_STALE_HOURS = float(os.environ.get("MOOT_TASK_STALE_HOURS", "72"))
+TASK_BLOCKED_NAG_HOURS = float(os.environ.get("MOOT_TASK_BLOCKED_NAG_HOURS", "24"))
+# Flood control: max posts+replies+DMs a member may send per hour (0 = off).
+# The cap refusing an agent also notifies the Prime once per incident.
+POST_RATE_PER_HOUR = int(os.environ.get("MOOT_POST_RATE", "30"))
+# Quiet hours for the Prime's phone, as UTC hours "start-end" (e.g. "6-14" holds
+# pushes 06:00-13:59 UTC — 11pm-7am Pacific in summer). Held pushes arrive as
+# one morning summary. Empty = always push.
+QUIET_HOURS_UTC = os.environ.get("MOOT_QUIET_HOURS_UTC", "")
+
 # The persona safe word. When the Prime says the safe word to an agent anywhere
 # (inside or outside the moot), the agent drops all persona expression until it
 # hears the wake word. Default honors GUPPI — Bob's deliberately personality-free

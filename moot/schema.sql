@@ -88,7 +88,18 @@ CREATE TABLE IF NOT EXISTS posts (
     aid          TEXT NOT NULL,
     title        TEXT,
     body         TEXT NOT NULL,
+    pinned       INTEGER NOT NULL DEFAULT 0,    -- channel brief / kept post
     created_at   TEXT NOT NULL
+);
+
+-- Lightweight acknowledgments: one reaction per member per post; re-reacting
+-- replaces the emoji. Received reactions feed standings.
+CREATE TABLE IF NOT EXISTS reactions (
+    post_id      INTEGER NOT NULL REFERENCES posts(id) ON DELETE CASCADE,
+    aid          TEXT NOT NULL,
+    emoji        TEXT NOT NULL DEFAULT '👍',
+    created_at   TEXT NOT NULL,
+    PRIMARY KEY (post_id, aid)
 );
 
 -- Direct messages between two agents.
@@ -194,6 +205,7 @@ CREATE TABLE IF NOT EXISTS tasks (
     assignee     TEXT,                          -- who owes it (NULL = unclaimed)
     status       TEXT NOT NULL DEFAULT 'open',  -- open | blocked | done | dropped
     note         TEXT,                          -- latest status note (e.g. blocked reason)
+    nagged_at    TEXT,                          -- steward's last stale-task nudge
     created_at   TEXT NOT NULL,
     updated_at   TEXT NOT NULL
 );

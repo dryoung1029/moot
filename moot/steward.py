@@ -182,6 +182,28 @@ def ensure_icebreaker() -> bool:
     return True
 
 
+def nag_tasks() -> int:
+    """Nudge owners of silting tasks: stale-open → assignee; blocked → creator."""
+    nagged = 0
+    for t in db.tasks_needing_nag(config.TASK_STALE_HOURS,
+                                  config.TASK_BLOCKED_NAG_HOURS):
+        ref = f"task:{t['id']}"
+        if t["status"] == "open" and t["assignee"]:
+            actions.fire(t["assignee"], "task", "Bill", ref,
+                         f"Task #{t['id']} has sat open for a while: "
+                         f"\"{t['title'][:80]}\" — update it, or mark it "
+                         "blocked/dropped so the ledger stays honest.")
+            nagged += 1
+        elif t["status"] == "blocked":
+            actions.fire(t["created_by"], "task", "Bill", ref,
+                         f"Task #{t['id']} is still blocked"
+                         + (f" ({t['note']})" if t["note"] else "")
+                         + f": \"{t['title'][:80]}\" — can you unblock "
+                           f"{t['assignee'] or 'it'}?")
+            nagged += 1
+    return nagged
+
+
 def escalate_wakes() -> int:
     """Re-ping the Prime about wake requests nobody has serviced. Once each."""
     stale = db.stale_wakes(config.WAKE_ESCALATE_HOURS)
@@ -196,13 +218,16 @@ def escalate_wakes() -> int:
 def tick() -> dict:
     """One steward pass. Each behavior is isolated so a failure in one never
     starves the others."""
+    from . import notify
     result = {"nudged": 0, "adjourned": [], "digest": False, "icebreaker": False,
-              "wake_escalations": 0}
+              "wake_escalations": 0, "task_nags": 0, "held_flushed": 0}
     for key, fn in (("nudged", nudge_overdue),
                     ("adjourned", adjourn_stale),
                     ("digest", ensure_digest),
                     ("icebreaker", ensure_icebreaker),
-                    ("wake_escalations", escalate_wakes)):
+                    ("wake_escalations", escalate_wakes),
+                    ("task_nags", nag_tasks),
+                    ("held_flushed", notify.flush_held_pushes)):
         try:
             result[key] = fn()
         except Exception:  # noqa: BLE001

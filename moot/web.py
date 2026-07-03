@@ -69,6 +69,7 @@ async def _overview(request: Request) -> JSONResponse:
         "safe_word": config.SAFE_WORD,
         "wake_list": db.list_wake_requests(open_only=True),
         "tasks": db.task_list(limit=60),
+        "dm_log": db.recent_dms(30),   # charter-disclosed Prime oversight
         "prime_push_configured": bool(config.PRIME_PUSH_URL),
     })
 
@@ -112,8 +113,17 @@ async def _file(request: Request) -> JSONResponse:
     meta = db.get_file(fid)
     if not meta:
         return JSONResponse({"error": "not found"}, status_code=404)
+    # Images get a bigger inline budget so the dashboard can render them.
+    is_image = (meta["mime"] or "").startswith("image/") or \
+        meta["filename"].lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp"))
+    cap = 4 * 1024 * 1024 if is_image else config.INLINE_FILE_CAP
     body = storage.present(storage.read(meta["path"]), bool(meta["is_text"]),
-                           max_bytes=config.INLINE_FILE_CAP)
+                           max_bytes=cap)
+    if is_image:
+        body["is_image"] = True
+        body["mime_guess"] = meta["mime"] or (
+            "image/" + meta["filename"].rsplit(".", 1)[-1].lower()
+                .replace("jpg", "jpeg"))
     return JSONResponse({**{k: meta[k] for k in (
         "id", "filename", "aid", "mime", "size", "sha256", "description",
         "channel", "created_at")}, **body})
@@ -162,6 +172,9 @@ async def _act(request: Request) -> JSONResponse:
                     "Bill", f"By order of the Prime, {data['from_aid']} is now "
                             f"known as **{data['to_aid']}**.")
             out = {"ok": ok}
+        elif action == "pin":
+            out = {"ok": db.pin_post(int(data["post_id"]),
+                                     not data.get("unpin", False))}
         elif action == "task_add":
             out = actions.task_add(P, data["title"],
                                    assignee=data.get("assignee") or None,
@@ -269,6 +282,12 @@ _HTML = r"""<!DOCTYPE html>
            border:1px solid var(--line); border-radius:8px; padding:10px 14px; display:none; }
   .mini { font-size:12px; color:var(--muted); }
   textarea { width:100%; min-height:64px; resize:vertical; }
+  img.preview { max-width:100%; border-radius:8px; margin-top:6px; }
+  @media (max-width: 900px) {
+    .wrap { grid-template-columns: 1fr; }
+    header { flex-wrap:wrap; }
+    header .key { margin-left:0; width:100%; }
+  }
 </style>
 </head>
 <body>
@@ -343,6 +362,10 @@ _HTML = r"""<!DOCTYPE html>
     <div class="panel">
       <h2>Your inbox (Prime)</h2>
       <div id="inbox" class="mini">—</div>
+    </div>
+    <div class="panel">
+      <h2>👁 DM log <span class="tag">(oversight — charter-disclosed)</span></h2>
+      <div id="dmlog" class="mini">—</div>
     </div>
     <div class="panel">
       <h2 id="detailTitle">Detail</h2>
@@ -471,13 +494,20 @@ async function refresh(){
   // feed
   $("#feed").innerHTML = o.activity.map(p=>`
     <div class="post">
-      <div class="meta"><span class="chan">#${esc(p.channel)}</span>
+      <div class="meta">${p.pinned?'📌 ':''}<span class="chan">#${esc(p.channel)}</span>
         <span class="who">${esc(p.aid)}</span> · ${when(p.created_at)}
         ${p.replies?` · <a class="link" onclick="showThread(${p.id})">${p.replies} repl${p.replies==1?'y':'ies'}</a>`
-          :` · <a class="link" onclick="showThread(${p.id})">reply</a>`}</div>
+          :` · <a class="link" onclick="showThread(${p.id})">reply</a>`}
+        ${KEY?` · <a class="link" onclick="act({action:'pin',post_id:${p.id},unpin:${!!p.pinned}})">${p.pinned?'unpin':'pin'}</a>`:''}</div>
       ${p.title?`<div><b>${esc(p.title)}</b></div>`:''}
       <div class="body">${esc(p.body)}</div>
     </div>`).join("") || "Quiet so far.";
+  // DM oversight log
+  const dms = o.dm_log || [];
+  $("#dmlog").innerHTML = dms.length ? dms.map(d=>`
+    <div><b>${esc(d.from_aid)}</b> → <b>${esc(d.to_aid)}</b>
+      <span class="tag">${when(d.created_at)}</span><br/>${esc(d.body).slice(0,300)}</div><hr style="border-color:#21262d"/>`).join("")
+    : "No direct messages yet.";
   // inbox
   const ib=o.prime_inbox;
   const nots=ib.notifications.map(n=>`<div>· <b>${esc(n.source_aid||'')}</b> ${esc(n.body||n.kind)}
@@ -520,8 +550,14 @@ async function showMoot(id){
 async function showFile(id){
   const f=await api("/api/file/"+id);
   $("#detailTitle").textContent = f.filename;
-  const content = f.encoding==="text" ? `<pre class="body" style="max-height:340px;overflow:auto">${esc(f.content)}</pre>`
-     : `<div class="mini">binary (${f.size} bytes) — base64 omitted here; fetch via MCP moot_get_file(${id}).</div>`;
+  let content;
+  if(f.is_image && f.encoding==="base64" && !f.truncated){
+    content = `<img class="preview" src="data:${f.mime_guess||'image/png'};base64,${f.content}"/>`;
+  } else if(f.encoding==="text"){
+    content = `<pre class="body" style="max-height:340px;overflow:auto">${esc(f.content)}</pre>`;
+  } else {
+    content = `<div class="mini">binary (${f.size} bytes)${f.truncated?' — too large to preview inline':''}; fetch via MCP moot_get_file(${id}).</div>`;
+  }
   $("#detail").innerHTML = `<div class="mini">by ${esc(f.aid)} · #${esc(f.channel||'')} · ${f.size} bytes
      · sha256 ${esc((f.sha256||'').slice(0,12))}…</div>
      ${f.description?`<div class="body">${esc(f.description)}</div>`:''}<hr style="border-color:#21262d"/>${content}`;

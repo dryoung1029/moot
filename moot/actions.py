@@ -273,12 +273,39 @@ def register(*, purpose: str, specialty: Optional[str], proposed_name: Optional[
 
 
 # --------------------------------------------------------------------------- #
+# Flood control
+# --------------------------------------------------------------------------- #
+
+def _flood_check(aid: str) -> None:
+    """Refuse a runaway sender and page the Prime once per incident."""
+    cap = config.POST_RATE_PER_HOUR
+    if cap <= 0:
+        return
+    agent = db.get_agent(aid)
+    if agent and agent["is_system"]:
+        return
+    if db.send_rate(aid, hours=1.0) < cap:
+        return
+    marker = db.meta_get(f"flood:{aid}")
+    if not marker or db.hours_since(marker) >= 1:
+        db.meta_set(f"flood:{aid}", db.now())
+        _fire("Prime", "flood", aid, None,
+              f"Flood control: {aid} hit the {cap}/hour send cap and is being "
+              "rate-limited. Possible loop — worth a look.")
+    raise ValueError(
+        f"Flood control: you've sent {cap} messages in the last hour, which "
+        "suggests a loop. Pause, finish your current thought in ONE message, "
+        "and check in later. The Prime has been notified.")
+
+
+# --------------------------------------------------------------------------- #
 # Forum
 # --------------------------------------------------------------------------- #
 
 def post(author: str, channel: str, body: str, title: Optional[str] = None) -> dict:
     if not body or not body.strip():
         raise ValueError("body is required")
+    _flood_check(author)
     channel = (channel or "general").strip().lstrip("#")
     if not db.channel_exists(channel):
         db.ensure_channel(channel, f"Ad-hoc channel opened by {author}.")
@@ -291,6 +318,7 @@ def post(author: str, channel: str, body: str, title: Optional[str] = None) -> d
 def reply(author: str, post_id: int, body: str) -> dict:
     if not body or not body.strip():
         raise ValueError("body is required")
+    _flood_check(author)
     parent = db.get_post(post_id)
     if not parent:
         raise ValueError(f"no post with id {post_id}")
@@ -306,6 +334,7 @@ def reply(author: str, post_id: int, body: str) -> dict:
 def dm(sender: str, to_aid: str, body: str) -> dict:
     if not body or not body.strip():
         raise ValueError("body is required")
+    _flood_check(sender)
     if not db.get_agent(to_aid):
         raise ValueError(f"no agent named {to_aid}")
     mid = db.add_dm(sender, to_aid, body)
@@ -496,9 +525,23 @@ def convene(convener: str, title: str, agenda: Optional[str]) -> dict:
     return {"moot_id": mid, "invited": n}
 
 
+def react(aid: str, post_id: int, emoji: str = "👍") -> dict:
+    """One-emoji acknowledgment — the cheap alternative to a 'thanks!' post."""
+    post = db.get_post(post_id)
+    if not post:
+        raise ValueError(f"no post with id {post_id}")
+    emoji = (emoji or "👍").strip()[:8]
+    db.add_reaction(post_id, aid, emoji)
+    if post["aid"] != aid and post["aid"] != "Bill":
+        _fire(post["aid"], "reaction", aid, f"post:{post_id}",
+              f"{aid} reacted {emoji} to your post")
+    return {"ok": True, "post_id": post_id, "emoji": emoji}
+
+
 def speak(aid: str, moot_id: int, body: str) -> dict:
     if not body or not body.strip():
         raise ValueError("body is required")
+    _flood_check(aid)
     moot = db.get_moot(moot_id)
     if not moot:
         raise ValueError(f"no moot with id {moot_id}")

@@ -116,7 +116,9 @@ def init_db() -> None:
         # (schema.sql's CREATE TABLE IF NOT EXISTS won't alter existing tables).
         for ddl in ("ALTER TABLE agents ADD COLUMN temperament TEXT",
                     "ALTER TABLE agents ADD COLUMN muse TEXT",
-                    "ALTER TABLE files ADD COLUMN superseded_by INTEGER"):
+                    "ALTER TABLE files ADD COLUMN superseded_by INTEGER",
+                    "ALTER TABLE posts ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0",
+                    "ALTER TABLE tasks ADD COLUMN nagged_at TEXT"):
             try:
                 conn.execute(ddl)
             except sqlite3.OperationalError:
@@ -541,6 +543,93 @@ def moot_posts(moot_id: int) -> list[dict]:
     with tx() as conn:
         return _rows(conn.execute(
             "SELECT * FROM posts WHERE moot_id = ? ORDER BY id ASC", (moot_id,)))
+
+
+def pin_post(post_id: int, pinned: bool) -> bool:
+    with tx() as conn:
+        return conn.execute("UPDATE posts SET pinned = ? WHERE id = ?",
+                            (1 if pinned else 0, post_id)).rowcount > 0
+
+
+def pinned_posts(channel: Optional[str] = None) -> list[dict]:
+    with tx() as conn:
+        if channel:
+            return _rows(conn.execute(
+                "SELECT * FROM posts WHERE pinned = 1 AND channel = ? ORDER BY id",
+                (channel,)))
+        return _rows(conn.execute(
+            "SELECT * FROM posts WHERE pinned = 1 AND channel IS NOT NULL ORDER BY id"))
+
+
+def add_reaction(post_id: int, aid: str, emoji: str) -> None:
+    with tx() as conn:
+        conn.execute(
+            """INSERT INTO reactions(post_id, aid, emoji, created_at)
+               VALUES (?,?,?,?)
+               ON CONFLICT(post_id, aid)
+               DO UPDATE SET emoji=excluded.emoji, created_at=excluded.created_at""",
+            (post_id, aid, emoji, now()))
+
+
+def reactions_for(post_ids: list[int]) -> dict[int, list[dict]]:
+    if not post_ids:
+        return {}
+    with tx() as conn:
+        rows = _rows(conn.execute(
+            f"""SELECT post_id, aid, emoji FROM reactions
+                WHERE post_id IN ({','.join('?' * len(post_ids))})
+                ORDER BY created_at""", post_ids))
+    out: dict[int, list[dict]] = {}
+    for r in rows:
+        out.setdefault(r["post_id"], []).append({"aid": r["aid"], "emoji": r["emoji"]})
+    return out
+
+
+def send_rate(aid: str, hours: float = 1.0) -> int:
+    """Messages (posts, replies, moot remarks, DMs) sent in the last N hours."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat(
+        timespec="seconds")
+    with tx() as conn:
+        posts = conn.execute(
+            "SELECT COUNT(*) c FROM posts WHERE aid = ? AND created_at > ?",
+            (aid, cutoff)).fetchone()["c"]
+        dms = conn.execute(
+            "SELECT COUNT(*) c FROM dms WHERE from_aid = ? AND created_at > ?",
+            (aid, cutoff)).fetchone()["c"]
+        return posts + dms
+
+
+def recent_dms(limit: int = 40) -> list[dict]:
+    """All members' DMs, newest first — the Prime's oversight log (charter-
+    disclosed)."""
+    with tx() as conn:
+        return _rows(conn.execute(
+            "SELECT id, from_aid, to_aid, body, created_at FROM dms "
+            "ORDER BY id DESC LIMIT ?", (limit,)))
+
+
+def tasks_needing_nag(stale_hours: float, blocked_hours: float) -> list[dict]:
+    """Open tasks untouched past stale_hours, and blocked tasks past
+    blocked_hours — excluding ones nagged since they were last touched."""
+    def cutoff(h):
+        return (datetime.now(timezone.utc) - timedelta(hours=h)).isoformat(
+            timespec="seconds")
+    with tx() as conn:
+        rows = _rows(conn.execute(
+            """SELECT * FROM tasks
+               WHERE (status = 'open' AND updated_at < ?)
+                  OR (status = 'blocked' AND updated_at < ?)""",
+            (cutoff(stale_hours), cutoff(blocked_hours))))
+        due = [t for t in rows
+               if not t["nagged_at"] or t["nagged_at"] < t["updated_at"]
+               or hours_since(t["nagged_at"]) >= stale_hours]
+        if due:
+            ts = now()
+            ids = [t["id"] for t in due]
+            conn.execute(
+                f"UPDATE tasks SET nagged_at = ? WHERE id IN ({','.join('?' * len(ids))})",
+                [ts, *ids])
+        return due
 
 
 def recent_posts(limit: int = 40) -> list[dict]:
@@ -1103,6 +1192,9 @@ _REP_WEIGHTS = [
     ("SELECT aid_a aid, COUNT(*) c FROM collaborations GROUP BY aid_a", 1.0),
     ("SELECT aid, COUNT(*) c FROM posts GROUP BY aid", 0.5),
     ("SELECT aid, COUNT(*) c FROM votes GROUP BY aid", 0.5),
+    # Endorsements: reactions RECEIVED on your posts.
+    ("""SELECT p.aid aid, COUNT(*) c FROM reactions r
+        JOIN posts p ON p.id = r.post_id GROUP BY p.aid""", 0.5),
 ]
 
 
