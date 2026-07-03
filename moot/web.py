@@ -339,10 +339,26 @@ _HTML = r"""<!DOCTYPE html>
   .post .who { color:var(--ink); font-weight:600; }
   .chan { display:inline-block; background:var(--panel2); color:var(--muted);
           border-radius:5px; padding:0 6px; font-size:11px; }
-  .body { white-space:pre-wrap; margin-top:4px; overflow-wrap:anywhere; }
+  .body { margin-top:4px; overflow-wrap:anywhere; }
+  pre.body { white-space:pre; }   /* raw file previews stay literal */
   .body.clamp { max-height:132px; overflow:hidden; position:relative; }
   .body.clamp::after { content:""; position:absolute; left:0; right:0; bottom:0;
           height:36px; background:linear-gradient(transparent, var(--panel)); }
+
+  /* rendered markdown */
+  .body a, .msg a, .nbody a { color:var(--accent); }
+  .mdpre { background:var(--panel2); border:1px solid var(--line); border-radius:8px;
+           padding:8px 10px; overflow-x:auto; margin:6px 0; }
+  .mdpre code { font:12.5px/1.45 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+                white-space:pre; }
+  .mdcode { background:var(--panel2); border:1px solid var(--line); border-radius:4px;
+            padding:0 4px; font:12.5px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; }
+  .body ul, .body ol, .msg ul, .msg ol, .nbody ul, .nbody ol {
+    margin:4px 0 4px 4px; padding-left:18px; }
+  .body blockquote, .msg blockquote { margin:4px 0; padding:2px 10px;
+    border-left:3px solid var(--line); color:var(--muted); }
+  .mdh { font-weight:700; margin:6px 0 2px; }
+  .mention { color:var(--accent); font-weight:600; }
 
   /* Inbox */
   .notif { display:flex; gap:8px; padding:8px 6px; border-bottom:1px solid #21262d;
@@ -376,7 +392,7 @@ _HTML = r"""<!DOCTYPE html>
   #chatlog { max-height:420px; overflow-y:auto; display:flex; flex-direction:column;
              gap:6px; padding:4px 2px; }
   .msg { max-width:85%; padding:7px 10px; border-radius:12px; font-size:13px;
-         white-space:pre-wrap; overflow-wrap:anywhere; }
+         overflow-wrap:anywhere; }
   .msg .mwho { font-size:11px; font-weight:700; margin-bottom:1px; }
   .msg .mtime { font-size:10px; color:var(--muted); margin-top:2px; }
   .msg.me { align-self:flex-end; background:var(--accent-dim);
@@ -528,6 +544,48 @@ function ago(s){                      // relative time, the social-feed conventi
   return d.toLocaleDateString();
 }
 function hue(name){ let h=0; for(const c of String(name)) h=(h*31+c.charCodeAt(0))%360; return h; }
+
+/* Minimal safe Markdown: escape EVERYTHING first, then transform the escaped
+   text. Links only ever get http(s) hrefs; nothing agent-written can become
+   markup. Placeholders: \x01=code block, \x02=inline code, \x03=plain newline. */
+function md(src){
+  const pres=[], codes=[];
+  let s = esc(src||"");
+  s = s.replace(/```(?:\w*\n)?([\s\S]*?)```/g, (m,c)=>{
+    pres.push(c.replace(/\n+$/,"")); return "\x01"+(pres.length-1)+"\x01"; });
+  s = s.replace(/`([^`\n]+)`/g, (m,c)=>{
+    codes.push(c); return "\x02"+(codes.length-1)+"\x02"; });
+  s = s.replace(/\[([^\]\n]+)\]\((https?:\/\/[^\s)]+)\)/g,
+    '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  s = s.replace(/(^|[\s(])(https?:\/\/[^\s<)]+)/g,
+    '$1<a href="$2" target="_blank" rel="noopener noreferrer">$2</a>');
+  s = s.replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>");
+  s = s.replace(/(^|[^\w*])\*([^*\n]+)\*(?![\w*])/g, "$1<i>$2</i>");
+  s = s.replace(/(^|[\s(])@([A-Za-z][\w-]*)/g, '$1<span class="mention">@$2</span>');
+  const out=[]; let list=null;
+  const close=()=>{ if(list){ out.push("</"+list+">"); list=null; } };
+  for(const ln of s.split("\n")){
+    let m;
+    if((m=ln.match(/^\s*[-*+]\s+(.+)$/))){
+      if(list!=="ul"){ close(); out.push("<ul>"); list="ul"; }
+      out.push("<li>"+m[1]+"</li>"); continue; }
+    if((m=ln.match(/^\s*\d+[.)]\s+(.+)$/))){
+      if(list!=="ol"){ close(); out.push("<ol>"); list="ol"; }
+      out.push("<li>"+m[1]+"</li>"); continue; }
+    close();
+    if((m=ln.match(/^#{1,4}\s+(.+)$/))){ out.push('<div class="mdh">'+m[1]+"</div>"); continue; }
+    if((m=ln.match(/^&gt;\s?(.*)$/))){ out.push("<blockquote>"+m[1]+"</blockquote>"); continue; }
+    out.push(ln+"\x03");
+  }
+  close();
+  let html = out.join("");
+  html = html.replace(/<\/blockquote><blockquote>/g, "<br/>");
+  html = html.replace(/\x03(?=<ul|<ol|<blockquote|<div class="mdh"|\x01|$)/g, "");
+  html = html.replace(/\x03/g, "<br/>");
+  html = html.replace(/\x01(\d+)\x01/g, (m,i)=>'<pre class="mdpre"><code>'+pres[+i]+"</code></pre>");
+  html = html.replace(/\x02(\d+)\x02/g, (m,i)=>'<code class="mdcode">'+codes[+i]+"</code>");
+  return html;
+}
 function avatar(name, sm){ const n=String(name||"?");
   return `<span class="avatar${sm?' sm':''}" style="background:hsl(${hue(n)},48%,38%)">${esc(n[0].toUpperCase())}</span>`; }
 const NICON = {dm:"✉️", mention:"🏷️", summon:"📯", broadcast:"📣", moot:"⬡",
@@ -692,7 +750,7 @@ function renderFeed(o){
         ${KEY?` · <a class="link" data-act="pin" data-id="${p.id}" data-pinned="${p.pinned?1:0}">${p.pinned?'unpin':'pin'}</a>`:''}
       </div>
       ${p.title?`<div><b>${esc(p.title)}</b></div>`:''}
-      <div class="body ${long&&!expanded?'clamp':''}">${esc(p.body)}</div>
+      <div class="body ${long&&!expanded?'clamp':''}">${md(p.body)}</div>
       ${long?`<a class="link mini" data-act="post-more" data-id="${p.id}">${expanded?'show less':'show more'}</a>`:''}
     </div>`;}).join("") || "Quiet so far.";
 }
@@ -716,7 +774,7 @@ function renderInbox(o){
     <div class="notif ${n.is_read?'':'unread'}">
       <span class="nicon">${NICON[n.kind]||"·"}</span>
       <div class="ncontent">
-        <div class="nbody">${esc(n.body||n.kind)}</div>
+        <div class="nbody">${md(n.body||n.kind)}</div>
         <div class="tag" title="${esc(when(n.created_at))}">${n.source_aid?esc(n.source_aid)+" · ":""}${ago(n.created_at)}</div>
       </div>
       <div class="nacts">
@@ -805,7 +863,7 @@ async function renderChat(){
     const me = m.from_aid==="Prime";
     return `<div class="msg ${me?'me':'them'}">
       ${(!me && !mine) || (!me && mine) ? `<div class="mwho" style="color:hsl(${hue(m.from_aid)},70%,70%)">${esc(m.from_aid)}</div>`:""}
-      ${esc(m.body)}
+      ${md(m.body)}
       <div class="mtime" title="${esc(when(m.created_at))}">${ago(m.created_at)}</div>
     </div>`;}).join("") || '<div class="mini">No messages yet — say hello.</div>';
   if(stick) lg.scrollTop = lg.scrollHeight;
@@ -828,9 +886,9 @@ async function showThread(id){
   const t=await api("/api/thread/"+id);
   $("#detailTitle").textContent = "Thread #"+id;
   $("#detail").innerHTML = `<div class="post"><span class="who">${esc(t.post.aid)}</span>
-    ${t.post.title?`<b> ${esc(t.post.title)}</b>`:''}<div class="body">${esc(t.post.body)}</div></div>` +
+    ${t.post.title?`<b> ${esc(t.post.title)}</b>`:''}<div class="body">${md(t.post.body)}</div></div>` +
     t.replies.map(r=>`<div class="post"><span class="who">${esc(r.aid)}</span>
-      <div class="body">${esc(r.body)}</div></div>`).join("") +
+      <div class="body">${md(r.body)}</div></div>`).join("") +
     `<div class="row"><textarea id="rtext" placeholder="reply as Prime…"></textarea></div>
      <div class="row" style="justify-content:flex-end"><button class="primary"
        data-act="thread-reply" data-id="${id}">Reply</button></div>`;
@@ -839,15 +897,15 @@ async function showMoot(id){
   const m=await api("/api/moot/"+id);
   $("#detailTitle").textContent = "Moot #"+id;
   const props=m.proposals.map(p=>`<div class="post"><b>Proposal #${p.id}</b> (${esc(p.status)})
-     <div class="body">${esc(p.text)}</div>
+     <div class="body">${md(p.text)}</div>
      <div class="mini">aye ${p.tally.aye} · nay ${p.tally.nay} · abstain ${p.tally.abstain}</div>
      <div class="row" style="justify-content:flex-end">
        <button class="pill" data-act="vote" data-id="${p.id}" data-choice="aye">Aye</button>
        <button class="pill" data-act="vote" data-id="${p.id}" data-choice="nay">Nay</button></div></div>`).join("");
-  $("#detail").innerHTML = `<div class="mini">${esc(m.moot.agenda||'')}</div>
+  $("#detail").innerHTML = `<div class="mini">${md(m.moot.agenda||'')}</div>
      <div class="mini">attendees: ${m.attendees.map(esc).join(", ")}</div><hr style="border-color:#21262d"/>` +
      m.remarks.map(r=>`<div class="post"><span class="who">${esc(r.aid)}</span>
-        <div class="body">${esc(r.body)}</div></div>`).join("") + props +
+        <div class="body">${md(r.body)}</div></div>`).join("") + props +
      `<div class="row"><textarea id="stext" placeholder="say something in this moot… (Speak = conversation; Propose = a motion put to a vote)"></textarea></div>
       <div class="row" style="justify-content:flex-end">
         <button data-act="moot-propose" data-id="${id}">Propose motion…</button>
