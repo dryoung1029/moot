@@ -42,6 +42,14 @@ class TestGovernor(unittest.TestCase):
                           if p["aid"] == "Bill")
         self.assertIn("passed the house", bodies)
 
+    def test_prime_notified_when_motion_opens(self):
+        # Regression: the all-members poll excludes system identities, which
+        # silently dropped the Prime from proposal notifications — the governor
+        # must see every bill from introduction, not just at signing.
+        kinds = [(n["kind"], n["ref"]) for n in db.list_notifications(
+            "Prime", unread_only=True, limit=50, mark_read=False)]
+        self.assertIn(("vote", f"proposal:{self.pid}"), kinds)
+
     def test_nay_majority_fails_without_the_governor(self):
         for aid in ("Codey", "Tutor", "Jeldon"):
             actions.vote(aid, self.pid, "nay", "not convinced")

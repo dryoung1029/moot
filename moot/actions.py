@@ -606,6 +606,13 @@ def propose(aid: str, moot_id: int, text: str) -> dict:
             # A due vote is directed communication: wake the voter.
             _maybe_wake(a["aid"], aid, f"proposal #{prop_id} awaits your vote "
                                        f"(moot #{moot_id})", f"proposal:{prop_id}")
+    # The governor watches every bill from introduction, not just at signing:
+    # the member fan-out above excludes system identities, so notify the Prime
+    # explicitly (no-op if the Prime is the proposer).
+    _fire("Prime", "vote", aid, f"proposal:{prop_id}",
+          f"{aid} raised proposal #{prop_id} in moot #{moot_id}: "
+          f"\"{text.strip()[:100]}\" — the house is voting; you may veto at "
+          f"any time.")
     return {"proposal_id": prop_id, "moot_id": moot_id}
 
 
