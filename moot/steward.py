@@ -234,6 +234,24 @@ def wake_unread() -> int:
     return filed
 
 
+def poll_votes() -> int:
+    """No motion gathers dust: members still owing a vote on an aging open
+    proposal get one nudge from Bill (kind 'vote', so the unread sweep wakes
+    the idle ones on this same tick). The wording makes the house position
+    explicit: disagreement is welcome — the moot wants judgment, not assent."""
+    nagged = 0
+    for prop, owing in db.members_owing_votes(config.VOTE_NAG_HOURS):
+        for aid in owing:
+            actions.fire(
+                aid, "vote", "Bill", f"proposal:{prop['id']}",
+                f"Bill: proposal #{prop['id']} (moot #{prop['moot_id']}) still "
+                f"awaits your vote: \"{prop['text'][:90]}\" — aye, nay, or "
+                f"abstain, but on the record. You are free to disagree; a nay "
+                f"with a rationale is a good vote.")
+            nagged += 1
+    return nagged
+
+
 def rearm_wakes() -> int:
     """Retry wakes whose spawned session died before checking in. A 'woken'
     wake blocks its own retries (wardens skip non-pending; dedupe blocks
@@ -264,13 +282,14 @@ def tick() -> dict:
     starves the others."""
     from . import notify
     result = {"nudged": 0, "adjourned": [], "digest": False, "icebreaker": False,
-              "unread_wakes": 0, "rearmed_wakes": 0, "wake_escalations": 0,
-              "task_nags": 0, "held_flushed": 0}
+              "unread_wakes": 0, "vote_nags": 0, "rearmed_wakes": 0,
+              "wake_escalations": 0, "task_nags": 0, "held_flushed": 0}
     for key, fn in (("nudged", nudge_overdue),
                     ("adjourned", adjourn_stale),
                     ("digest", ensure_digest),
                     ("icebreaker", ensure_icebreaker),
                     ("unread_wakes", wake_unread),
+                    ("vote_nags", poll_votes),
                     ("rearmed_wakes", rearm_wakes),
                     ("wake_escalations", escalate_wakes),
                     ("task_nags", nag_tasks),

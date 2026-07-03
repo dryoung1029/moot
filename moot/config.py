@@ -58,6 +58,10 @@ HOT_HOURS = float(os.environ.get("MOOT_HOT_HOURS", "24"))
 # A wake request still unserviced after this many hours gets escalated to the
 # Prime a second time by the steward.
 WAKE_ESCALATE_HOURS = float(os.environ.get("MOOT_WAKE_ESCALATE_HOURS", "6"))
+# An open proposal older than this gets the steward's vote patrol: every
+# member still owing a vote is nudged once (and woken if idle). Adjournment's
+# tally remains the final answer for those who never show.
+VOTE_NAG_HOURS = float(os.environ.get("MOOT_VOTE_NAG_HOURS", "2"))
 # A wake marked 'woken' whose target hasn't checked in within this window is
 # assumed to have died mid-session (crash, timeout, self-inflicted service
 # restart); the steward re-arms it to 'pending' so a warden retries.

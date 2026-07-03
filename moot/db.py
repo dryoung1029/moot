@@ -1516,6 +1516,35 @@ def unanswered_posts(exclude_aid: str, hours: float = 72, limit: int = 5) -> lis
             (exclude_aid, cutoff, limit)))
 
 
+def members_owing_votes(min_age_hours: float) -> list[tuple[dict, list[str]]]:
+    """Dust patrol: for each open proposal (in an open moot) older than
+    min_age_hours, the non-system members who haven't voted and haven't
+    already been nagged by Bill for it. One nag per member per proposal —
+    adjournment's tally is the final answer for perpetual abstainers."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=min_age_hours)
+              ).isoformat(timespec="seconds")
+    out: list[tuple[dict, list[str]]] = []
+    with tx() as conn:
+        props = _rows(conn.execute(
+            """SELECT p.* FROM proposals p JOIN moots m ON m.id = p.moot_id
+               WHERE p.status = 'open' AND m.status = 'open'
+                 AND p.created_at < ?""", (cutoff,)))
+        for p in props:
+            owing = [r["aid"] for r in conn.execute(
+                """SELECT a.aid FROM agents a
+                   WHERE a.is_system = 0 AND a.aid != ?
+                     AND NOT EXISTS (SELECT 1 FROM votes v
+                                     WHERE v.proposal_id = ? AND v.aid = a.aid)
+                     AND NOT EXISTS (SELECT 1 FROM notifications n
+                                     WHERE n.aid = a.aid AND n.kind = 'vote'
+                                       AND n.source_aid = 'Bill'
+                                       AND n.ref = ?)""",
+                (p["aid"], p["id"], f"proposal:{p['id']}"))]
+            if owing:
+                out.append((p, owing))
+    return out
+
+
 def unvoted_open_proposals(aid: str, limit: int = 5) -> list[dict]:
     """Open proposals in open moots this agent hasn't voted on."""
     with tx() as conn:

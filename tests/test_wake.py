@@ -226,6 +226,46 @@ class TestMootGathers(unittest.TestCase):
         targets = {w["target_aid"] for w in db.list_wake_requests()}
         self.assertEqual(targets, {"Doc", "Codey"})
 
+    def test_proposal_polls_non_attendees_too(self):
+        # A motion is the whole moot's business: a member who never spoke in
+        # the moot must still be polled.
+        _reg("Carol")
+        mid = actions.convene("Doc", "Vote night", None)["moot_id"]
+        _make_cold("Carol")
+        actions.propose("Doc", mid, "Adopt trunk-based development")
+        targets = {w["target_aid"] for w in db.list_wake_requests()}
+        self.assertIn("Carol", targets)
+        notifs = db.list_notifications("Carol", unread_only=True, limit=10,
+                                       mark_read=False)
+        vote_notes = [n for n in notifs if n["kind"] == "vote"]
+        self.assertTrue(vote_notes)
+        self.assertIn("free" if "free" in vote_notes[0]["body"] else "judgment",
+                      vote_notes[0]["body"],
+                      "the ballot call must license disagreement")
+
+    def test_vote_patrol_nags_once_then_rests(self):
+        mid = actions.convene("Doc", "Slow vote", None)["moot_id"]
+        actions.propose("Doc", mid, "Rewrite it in Rust")
+        # Codey ignores it; age the proposal past the patrol threshold.
+        with db.tx() as conn:
+            conn.execute("UPDATE proposals SET created_at = "
+                         "'2000-01-01T00:00:00+00:00'")
+        first = steward.poll_votes()
+        self.assertGreaterEqual(first, 1)
+        self.assertEqual(steward.poll_votes(), 0,
+                         "one nag per member per proposal — no pile-ons")
+
+    def test_vote_patrol_skips_voters(self):
+        mid = actions.convene("Doc", "Quick vote", None)["moot_id"]
+        pid = actions.propose("Doc", mid, "Ship it")["proposal_id"]
+        actions.vote("Codey", pid, "nay", "not ready")
+        actions.vote("Tutor", pid, "aye", None)
+        with db.tx() as conn:
+            conn.execute("UPDATE proposals SET created_at = "
+                         "'2000-01-01T00:00:00+00:00'")
+        self.assertEqual(steward.poll_votes(), 0,
+                         "everyone voted (nay included) — nobody to nag")
+
     def test_steward_sweep_counts_moot_invites(self):
         # An unread moot invitation alone (no DM) must trigger the unread sweep.
         saved = config.WAKE_AUTO_HOURS

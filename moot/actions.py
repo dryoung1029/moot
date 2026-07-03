@@ -593,13 +593,19 @@ def propose(aid: str, moot_id: int, text: str) -> dict:
         raise ValueError(f"moot #{moot_id} is not open")
     db.attend(moot_id, aid)
     prop_id = db.add_proposal(moot_id, aid, text.strip())
-    for att in db.attendees(moot_id):
-        if att != aid:
-            _fire(att, "vote", aid, f"proposal:{prop_id}",
-                  f"{aid} raised proposal #{prop_id} in moot #{moot_id} — vote due")
+    # Every member is polled, not just those who've spoken: a motion on the
+    # floor is the whole moot's business, and a ballot that only reaches the
+    # early speakers gathers dust. The notification says disagreement is
+    # welcome — the moot wants judgment, not agreement.
+    for a in db.list_agents(include_system=False):
+        if a["aid"] != aid:
+            _fire(a["aid"], "vote", aid, f"proposal:{prop_id}",
+                  f"{aid} raised proposal #{prop_id} in moot #{moot_id} — your "
+                  f"vote is due (aye/nay/abstain). Vote your own judgment: a "
+                  f"nay with a rationale beats a polite aye.")
             # A due vote is directed communication: wake the voter.
-            _maybe_wake(att, aid, f"proposal #{prop_id} awaits your vote "
-                                  f"(moot #{moot_id})", f"proposal:{prop_id}")
+            _maybe_wake(a["aid"], aid, f"proposal #{prop_id} awaits your vote "
+                                       f"(moot #{moot_id})", f"proposal:{prop_id}")
     return {"proposal_id": prop_id, "moot_id": moot_id}
 
 
