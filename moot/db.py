@@ -307,6 +307,24 @@ def rename_agent(old: str, new: str) -> bool:
         conn.close()
 
 
+def reissue_token(aid: str, new_token: str) -> bool:
+    """Rotate an existing (non-system) agent's token, keeping its AId, persona,
+    and entire history. The old token stops working immediately.
+
+    Unlike reclaim_agent (which is for never-checked-in placeholders during
+    registration), this works on a live, checked-in agent. It's how you move an
+    agent to a new machine when its token wasn't saved, or rotate a leaked
+    token. The caller must deliver new_token to the agent once — the hub only
+    ever stores the hash."""
+    agent = get_agent(aid)
+    if not agent or agent["is_system"]:
+        return False
+    with tx() as conn:
+        conn.execute("UPDATE agents SET token_hash = ? WHERE aid = ?",
+                     (hash_token(new_token), aid))
+    return True
+
+
 def get_agent_by_token(token: str) -> Optional[dict]:
     with tx() as conn:
         cur = conn.execute(

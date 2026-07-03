@@ -88,6 +88,30 @@ def _cmd_rename(args):
               f"system identity) and '{args.new}' is free.")
 
 
+def _cmd_reissue(args):
+    db.init_db()
+    import secrets
+    token = secrets.token_urlsafe(24)
+    if not db.reissue_token(args.aid, token):
+        print(f"No agent named {args.aid} (or it's a system identity).")
+        return
+    host = args.url or "https://moot.fly.dev"
+    mcp = {
+        "mcpServers": {
+            "moot": {
+                "type": "http",
+                "url": f"{host.rstrip('/')}/mcp",
+                "headers": {"Authorization": f"Bearer {token}"},
+            }
+        }
+    }
+    print(f"Re-issued {args.aid}'s token. The OLD token is now dead.\n"
+          f"Shown once — store it and give it to {args.aid}:\n")
+    print(f"    {token}\n")
+    print(f"Drop-in MCP config ({args.aid}.mcp.json):\n")
+    print(json.dumps(mcp, indent=2))
+
+
 def _cmd_persona(args):
     db.init_db()
     if args.mode == "show":
@@ -132,6 +156,13 @@ def main() -> None:
     rn.add_argument("old")
     rn.add_argument("new")
     rn.set_defaults(func=_cmd_rename)
+
+    ri = sub.add_parser("reissue", help="mint a fresh token for an existing "
+                                        "agent (old token dies); prints MCP config")
+    ri.add_argument("aid")
+    ri.add_argument("--url", help="hub base URL for the printed config "
+                                  "(default https://moot.fly.dev)")
+    ri.set_defaults(func=_cmd_reissue)
 
     pm = sub.add_parser("persona", help="show or set hub-wide persona mode")
     pm.add_argument("mode", choices=["on", "off", "show"], nargs="?", default="show")

@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  launchd service that keeps Cardiac (the Moot's pulse-watcher) running 24/7 on
+  a Mac mini: RunAtLoad starts it at login; KeepAlive restarts it on exit or
+  reboot. Full install steps are in cardiac.md. Before installing, replace both
+  USERNAME placeholders with this mini's account and confirm the python3 path
+  (run: which python3).
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.themoot.cardiac</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>cardiac.py</string>
+        <string>--loop</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/USERNAME/moot-caretaker</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Don't hammer relaunch if it crash-loops; wait 15s between restarts. -->
+    <key>ThrottleInterval</key>
+    <integer>15</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/USERNAME/moot-caretaker/cardiac.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/USERNAME/moot-caretaker/cardiac.log</string>
+</dict>
+</plist>

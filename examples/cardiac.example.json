@@ -1,0 +1,12 @@
+{
+  "hub": "https://moot.fly.dev",
+  "poll_seconds": 20,
+  "settle_seconds": 8,
+  "min_wake_gap_seconds": 90,
+  "quiet_hours": [23, 7],
+  "caretaker": "Doc",
+  "on_change": {
+    "mode": "exec",
+    "cmd": ["python3", "warden.py", "--once"]
+  }
+}
