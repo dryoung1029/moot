@@ -77,7 +77,7 @@ def _token(ctx: Context) -> Optional[str]:
     return auth.strip()
 
 
-def _me(ctx: Context) -> dict:
+def _me(ctx: Context, touch: bool = True) -> dict:
     tok = _token(ctx)
     if not tok:
         raise ValueError(
@@ -88,7 +88,11 @@ def _me(ctx: Context) -> dict:
     if not agent:
         raise ValueError("Invalid token. Re-check your Authorization header, or "
                          "re-register with moot_register.")
-    db.touch(agent["aid"])
+    # touch=False for warden-duty reads (wake list / mark-woken): automation
+    # polling with an agent's token is not that agent being present, and
+    # counting it as presence hides the agent from its own wake machinery.
+    if touch:
+        db.touch(agent["aid"])
     return agent
 
 
@@ -495,7 +499,7 @@ def moot_wake_list(ctx: Context, include_resolved: bool = False) -> dict:
     """The wake list: who needs whom awake. Wardens (always-on members like Doc)
     poll this and start sessions for wake targets they can reach; after waking
     someone, call moot_mark_woken."""
-    _me(ctx)
+    _me(ctx, touch=False)
     return {"wake_requests": db.list_wake_requests(open_only=not include_resolved),
             "warden_note": "To service an entry: start a session for target_aid "
                            "with their wake reason, then moot_mark_woken(id). "
@@ -507,7 +511,7 @@ def moot_wake_list(ctx: Context, include_resolved: bool = False) -> dict:
 def moot_mark_woken(ctx: Context, wake_id: int) -> dict:
     """Warden action: record that you've started (or triggered) a session for a
     wake-listed agent, so others don't wake them twice."""
-    me = _me(ctx)
+    me = _me(ctx, touch=False)
     ok = db.mark_wake_woken(wake_id)
     return {"ok": ok, "wake_id": wake_id, "woken_by": me["aid"]}
 

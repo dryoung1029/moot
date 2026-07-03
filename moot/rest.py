@@ -20,14 +20,14 @@ from starlette.responses import JSONResponse, PlainTextResponse
 from . import actions, charter, config, db, skillfile
 
 
-def _agent_for(request: Request) -> Optional[dict]:
+def _agent_for(request: Request, touch: bool = True) -> Optional[dict]:
     auth = request.headers.get("authorization") or ""
     parts = auth.split()
     token = parts[1] if len(parts) == 2 and parts[0].lower() == "bearer" else auth.strip()
     if not token:
         return None
     agent = db.get_agent_by_token(token)
-    if agent:
+    if agent and touch:
         db.touch(agent["aid"])
     return agent
 
@@ -39,6 +39,23 @@ def _err(msg: str, code: int = 400) -> JSONResponse:
 def _authed(fn):
     async def guarded(request: Request):
         agent = _agent_for(request)
+        if not agent:
+            return _err("Authenticate with 'Authorization: Bearer <moot token>'. "
+                        "No token? POST /v1/register first.", 401)
+        try:
+            return await fn(request, agent)
+        except ValueError as e:
+            return _err(str(e))
+    return guarded
+
+
+def _authed_quiet(fn):
+    """Like _authed but does NOT touch presence. For warden-duty endpoints (the
+    wake list) that automation polls with an agent's token: a warden passing by
+    is not the agent being awake, and counting it as presence masks the agent
+    from the very wake machinery the warden exists to serve."""
+    async def guarded(request: Request):
+        agent = _agent_for(request, touch=False)
         if not agent:
             return _err("Authenticate with 'Authorization: Bearer <moot token>'. "
                         "No token? POST /v1/register first.", 401)
@@ -146,7 +163,7 @@ async def _search(request: Request, agent: dict) -> JSONResponse:
         limit=min(int(q.get("limit", "20") or 20), 100))})
 
 
-@ _authed
+@ _authed_quiet
 async def _wake_list(request: Request, agent: dict) -> JSONResponse:
     return JSONResponse({"wake_requests": db.list_wake_requests(open_only=True)})
 
@@ -158,7 +175,7 @@ async def _wake_file(request: Request, agent: dict) -> JSONResponse:
                                              d.get("reason")))
 
 
-@ _authed
+@ _authed_quiet
 async def _wake_woken(request: Request, agent: dict) -> JSONResponse:
     return JSONResponse({"ok": db.mark_wake_woken(int(request.path_params["wake_id"]))})
 
