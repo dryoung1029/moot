@@ -71,10 +71,13 @@ class TestGovernor(unittest.TestCase):
     def test_sign_enacts(self):
         for aid in ("Codey", "Tutor", "Jeldon"):
             actions.vote(aid, self.pid, "aye", None)
-        out = actions.sign_proposal(self.pid)
+        out = actions.sign_proposal(self.pid)   # awaiting_prime -> carried
         self.assertEqual(out["status"], "carried")
-        with self.assertRaises(ValueError):
-            actions.sign_proposal(self.pid)  # can't sign twice
+        # Pressing Execute again on a carried-but-unbuilt motion re-dispatches
+        # the keeper — it's idempotent, not an error.
+        again = actions.execute_proposal(self.pid)
+        self.assertTrue(again["redispatched"])
+        self.assertEqual(db.get_proposal(self.pid)["status"], "carried")
 
     def test_cannot_sign_an_undecided_motion(self):
         with self.assertRaises(ValueError):
@@ -185,6 +188,35 @@ class TestExecutive(unittest.TestCase):
         self.assertEqual(db.carried_pending_execution(), [])
         self.assertFalse([w for w in db.list_wake_requests()
                           if w["target_aid"] == "Garfield"])
+
+    def test_decisions_queue_shows_passed_and_carried(self):
+        # awaiting_prime appears in the queue...
+        self.assertEqual([p["id"] for p in db.decisions_awaiting()], [self.pid])
+        actions.execute_proposal(self.pid)       # -> carried, still unbuilt
+        self.assertEqual([p["id"] for p in db.decisions_awaiting()], [self.pid])
+        actions.mark_executed("Garfield", self.pid, "built it")
+        self.assertEqual(db.decisions_awaiting(), [])   # executed -> gone
+
+    def test_execute_a_legacy_carried_motion(self):
+        # A motion carried by an old adjourn (no executive dispatch) still gets
+        # picked up: Execute re-dispatches the keeper.
+        db.set_proposal_status(self.pid, "carried")
+        out = actions.execute_proposal(self.pid)
+        self.assertEqual(out["status"], "carried")
+        self.assertTrue([w for w in db.list_wake_requests()
+                         if w["target_aid"] == "Garfield"])
+
+    def test_veto_a_carried_but_unbuilt_motion(self):
+        actions.execute_proposal(self.pid)       # awaiting_prime -> carried
+        actions.veto_proposal(self.pid, "changed my mind before it shipped")
+        self.assertEqual(db.get_proposal(self.pid)["status"], "vetoed")
+        self.assertEqual(db.decisions_awaiting(), [])
+
+    def test_cannot_veto_after_executed(self):
+        actions.execute_proposal(self.pid)
+        actions.mark_executed("Garfield", self.pid, "done")
+        with self.assertRaises(ValueError):
+            actions.veto_proposal(self.pid)
 
 
 if __name__ == "__main__":

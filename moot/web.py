@@ -72,6 +72,8 @@ async def _overview(request: Request) -> JSONResponse:
         } for m in db.list_moots("open")],
         "electorate": db.electorate_size(),
         "majority": db.electorate_size() // 2 + 1,
+        "decisions": [{**p, "tally": db.member_tally(p["id"])}
+                      for p in db.decisions_awaiting()],
         "files": db.list_files(None, None, 20),
         "prime_inbox": {
             "notifications": db.list_notifications("Prime", unread_only=False,
@@ -183,8 +185,8 @@ async def _act(request: Request) -> JSONResponse:
         elif action == "vote":
             out = actions.vote(P, int(data["proposal_id"]), data["choice"],
                                data.get("rationale"))
-        elif action == "sign":
-            out = actions.sign_proposal(int(data["proposal_id"]))
+        elif action in ("sign", "execute"):
+            out = actions.execute_proposal(int(data["proposal_id"]))
         elif action == "veto":
             out = actions.veto_proposal(int(data["proposal_id"]),
                                         data.get("reason"))
@@ -506,6 +508,11 @@ _HTML = r"""<!DOCTYPE html>
       <h2>⏰ Wake list <span class="count" id="wakeCount">0</span></h2>
       <div id="wakes"></div>
     </div>
+    <div class="panel hidden" id="decisionsPanel" data-sec="gov" style="border-color:var(--accent)">
+      <h2>🏛 Decisions — your call <span class="count hot" id="decCount">0</span></h2>
+      <div class="mini" style="margin:-2px 0 6px">Passed motions. <b>Execute</b> and I implement it; <b>Veto</b> kills it.</div>
+      <div id="decisions"></div>
+    </div>
     <div class="panel" data-sec="people">
       <h2>Roster <span class="count" id="agentCount">0</span></h2>
       <div id="roster"></div>
@@ -729,7 +736,7 @@ async function refresh(){
     ? `Mute the fleet's personas (equivalent of saying “${o.safe_word||'GUPPI mode'}” to everyone)`
     : "Personas are muted fleet-wide — click to wake them";
   renderWakes(o); renderTasks(o); renderRoster(o); renderChannels(o);
-  renderMoots(o); renderFiles(o); renderFeed(o); renderInbox(o); renderConvos(o);
+  renderDecisions(o); renderMoots(o); renderFiles(o); renderFeed(o); renderInbox(o); renderConvos(o);
   if(chat) renderChat();   // keep an open chat live
 }
 
@@ -818,14 +825,31 @@ function renderChannels(o){
   if(cur) sel.value=cur;
 }
 
+function renderDecisions(o){
+  const ds = o.decisions || [];
+  $("#decisionsPanel").classList.toggle("hidden", !ds.length);
+  $("#decCount").textContent = ds.length;
+  tabBadge("badge-gov", ds.length);   // the governance to-do that needs YOU
+  $("#decisions").innerHTML = ds.map(p=>`
+    <div class="proposal ${esc(p.status)}">
+      <div class="mini">⚖ #${p.id} · moot #${p.moot_id}${p.moot_title?` “${esc(p.moot_title)}”`:''} · moved by ${esc(p.aid)}
+        · ${p.status==="awaiting_prime"?"passed the house":"approved — awaiting build"}</div>
+      <div class="body">${md(p.text)}</div>
+      <div class="mini">aye ${p.tally.aye} · nay ${p.tally.nay} · abstain ${p.tally.abstain}</div>
+      ${KEY?`<div class="row" style="justify-content:flex-end">
+        <button class="pill" data-act="execute" data-id="${p.id}">✅ Execute</button>
+        <button class="pill danger" data-act="veto" data-id="${p.id}">✗ Veto</button>
+      </div>`:'<div class="mini">unlock to act</div>'}
+    </div>`).join("");
+}
+
 function renderMoots(o){
   const moots = o.moots||[];
   const toSign = moots.flatMap(m=>m.proposals||[])
                       .filter(p=>p.status==="awaiting_prime").length;
   const mc=$("#mootCount");
-  mc.textContent = toSign ? toSign+" to sign" : moots.length;
+  mc.textContent = toSign ? toSign+" to decide" : moots.length;
   mc.className = "count"+(toSign?" hot":"");
-  tabBadge("badge-gov", toSign);
   $("#moots").innerHTML = moots.length ? moots.map(m=>`
      <div class="post">
        <a class="link" data-act="show-moot" data-id="${m.id}"><b>#${m.id} ${esc(m.title)}</b></a>
@@ -834,15 +858,14 @@ function renderMoots(o){
        ${(m.proposals||[]).map(p=>`
        <div class="proposal ${esc(p.status)}">
          <div class="mini">⚖ #${p.id} · raised by ${esc(p.aid)}</div>
-         ${p.status==="awaiting_prime"?'<div class="sigline">✍ PASSED THE HOUSE — YOUR SIGNATURE REQUIRED</div>':''}
+         ${p.status==="awaiting_prime"?'<div class="sigline">✍ PASSED THE HOUSE — decide it in 🏛 Decisions above</div>':''}
          <div class="body">${md(p.text)}</div>
          <div class="mini">aye ${p.tally.aye} · nay ${p.tally.nay} · abstain ${p.tally.abstain}
            ${p.status==="open"?` · majority at ${o.majority} of ${o.electorate}`
              :p.status==="carried"?` · ✅ carried — ${p.executed_at?'executed ✔':'implementing…'}`
              :` · ${esc(p.status).replace("_"," ")}`}</div>
-         ${KEY&&(p.status==="open"||p.status==="awaiting_prime")?`
+         ${KEY&&p.status==="open"?`
          <div class="row" style="justify-content:flex-end">
-           ${p.status==="awaiting_prime"?`<button class="pill" data-act="sign" data-id="${p.id}">✍ Sign — enact</button>`:''}
            <button class="pill danger" data-act="veto" data-id="${p.id}">✗ Veto</button>
          </div>`:''}
        </div>`).join("")}
@@ -1167,8 +1190,10 @@ document.addEventListener("click", ev=>{
       break;
     case "vote": act({action:'vote', proposal_id:+A.id, choice:A.choice}); break;
     case "sign":
-      if(confirm("Sign proposal #"+A.id+" into effect?"))
-        act({action:'sign', proposal_id:+A.id});
+    case "execute":
+      if(confirm("Execute proposal #"+A.id+"? It carries, and the keeper "+
+                 "(Bill/Garfield) is dispatched to implement it."))
+        act({action:'execute', proposal_id:+A.id});
       break;
     case "veto": {
       const reason=prompt("Veto proposal #"+A.id+" — reason? (optional, goes on the record)");

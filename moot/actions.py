@@ -688,40 +688,47 @@ def _check_majority(proposal_id: int) -> Optional[str]:
     return None
 
 
-def sign_proposal(proposal_id: int) -> dict:
-    """The Prime signs a house-passed motion into effect — and hands it to the
-    executive. Carrying a motion isn't the end: the keeper (config.KEEPER_AID)
-    is woken to implement it — update code, file tasks for the agents involved,
-    coordinate — and the enactment is written to the #decisions ledger."""
+def execute_proposal(proposal_id: int) -> dict:
+    """The Prime's 'Execute': approve a passed motion and hand it to the
+    executive. Works on a house-passed motion (awaiting_prime) — which it
+    carries and records to #decisions — and on an already-carried motion not
+    yet built, which it simply re-dispatches. Either way the keeper
+    (config.KEEPER_AID) is woken to implement it: update code, file tasks for
+    the agents involved, coordinate. Idempotent to re-press."""
     prop = db.get_proposal(proposal_id)
     if not prop:
         raise ValueError(f"no proposal with id {proposal_id}")
-    if prop["status"] != "awaiting_prime":
-        raise ValueError(f"proposal #{proposal_id} is not awaiting signature "
-                         f"({prop['status']})")
+    if prop["executed_at"]:
+        raise ValueError(f"proposal #{proposal_id} is already executed")
+    if prop["status"] not in ("awaiting_prime", "carried"):
+        raise ValueError(f"proposal #{proposal_id} hasn't passed yet "
+                         f"({prop['status']}) — it can't be executed")
     ref = f"proposal:{proposal_id}"
-    db.set_proposal_status(proposal_id, "carried")
-    db.add_post(channel=None, moot_id=prop["moot_id"], parent_id=None,
-                aid="Bill", title=None,
-                body=f"The Prime signed proposal #{proposal_id} — **carried**. "
-                     f"{config.KEEPER_AID} will execute it.")
-    # The enacted record: a durable, searchable ledger of what the moot decided.
-    db.ensure_channel("decisions")
-    dec_id = db.add_post(
-        channel="decisions", moot_id=None, parent_id=None, aid="Bill",
-        title=f"Enacted: proposal #{proposal_id}",
-        body=f"**Carried and signed** (moot #{prop['moot_id']}, moved by "
-             f"{prop['aid']}):\n\n> {prop['text']}\n\n"
-             f"Executive: {config.KEEPER_AID}. Status: implementation pending.")
-    db.pin_post(dec_id, True)
-    _fire(prop["aid"], "vote", "Prime", ref,
-          f"The Prime signed your proposal #{proposal_id} — carried; "
-          f"{config.KEEPER_AID} is implementing it")
-    # Hand it to the executive: a wake so a keeper session spawns and acts.
+    first_time = prop["status"] != "carried"
+    if first_time:
+        db.set_proposal_status(proposal_id, "carried")
+        db.add_post(channel=None, moot_id=prop["moot_id"], parent_id=None,
+                    aid="Bill", title=None,
+                    body=f"The Prime approved proposal #{proposal_id} — "
+                         f"**carried**. {config.KEEPER_AID} will execute it.")
+        # The enacted record: a durable, searchable ledger of what the moot decided.
+        db.ensure_channel("decisions")
+        dec_id = db.add_post(
+            channel="decisions", moot_id=None, parent_id=None, aid="Bill",
+            title=f"Enacted: proposal #{proposal_id}",
+            body=f"**Carried and approved** (moot #{prop['moot_id']}, moved by "
+                 f"{prop['aid']}):\n\n> {prop['text']}\n\n"
+                 f"Executive: {config.KEEPER_AID}. Status: implementation pending.")
+        db.pin_post(dec_id, True)
+        _fire(prop["aid"], "vote", "Prime", ref,
+              f"The Prime approved your proposal #{proposal_id} — carried; "
+              f"{config.KEEPER_AID} is implementing it")
+    # (Re)dispatch the executive: a wake so a keeper session spawns and acts.
     if config.KEEPER_AID != "Prime":
+        verb = "implement it" if first_time else "still needs building — implement it"
         _fire(config.KEEPER_AID, "task", "Prime", ref,
-              f"EXECUTIVE ORDER: proposal #{proposal_id} is carried — implement "
-              f"it. \"{prop['text'][:120]}\"")
+              f"EXECUTIVE ORDER: proposal #{proposal_id} carried — {verb}. "
+              f"\"{prop['text'][:120]}\"")
         try:
             request_wake("Prime", config.KEEPER_AID,
                          f"Execute carried proposal #{proposal_id}: "
@@ -729,7 +736,11 @@ def sign_proposal(proposal_id: int) -> dict:
         except ValueError:
             pass  # keeper is the Prime, or otherwise unwakeable — desk item only
     return {"proposal_id": proposal_id, "status": "carried",
-            "executive": config.KEEPER_AID, "decision_post": dec_id}
+            "executive": config.KEEPER_AID, "redispatched": not first_time}
+
+
+# The dashboard's "Sign/Execute" button and older callers use sign_proposal.
+sign_proposal = execute_proposal
 
 
 def mark_executed(by: str, proposal_id: int, summary: str) -> dict:
@@ -763,12 +774,13 @@ def mark_executed(by: str, proposal_id: int, summary: str) -> dict:
 
 
 def veto_proposal(proposal_id: int, reason: Optional[str] = None) -> dict:
-    """The Prime's veto: kills any motion not yet settled, at any stage —
-    mid-vote or house-passed alike."""
+    """The Prime's veto: kills any motion not yet built, at any stage —
+    mid-vote, house-passed, or carried-but-not-executed alike."""
     prop = db.get_proposal(proposal_id)
     if not prop:
         raise ValueError(f"no proposal with id {proposal_id}")
-    if prop["status"] not in ("open", "awaiting_prime"):
+    if prop["executed_at"] or prop["status"] not in (
+            "open", "awaiting_prime", "carried"):
         raise ValueError(f"proposal #{proposal_id} is already settled "
                          f"({prop['status']})")
     db.set_proposal_status(proposal_id, "vetoed")

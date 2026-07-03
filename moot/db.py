@@ -1037,6 +1037,20 @@ def set_proposal_status(proposal_id: int, status: str) -> bool:
             (status, proposal_id)).rowcount > 0
 
 
+def decisions_awaiting() -> list[dict]:
+    """Every proposal that needs the Prime's hand: house-passed and awaiting the
+    call ('awaiting_prime'), or approved-but-not-yet-built ('carried', no
+    executed_at). This is the Prime's single action queue — Execute or Veto —
+    regardless of whether the motion's moot is still open or long adjourned."""
+    with tx() as conn:
+        return _rows(conn.execute(
+            """SELECT p.*, m.title AS moot_title, m.status AS moot_status
+               FROM proposals p JOIN moots m ON m.id = p.moot_id
+               WHERE p.executed_at IS NULL
+                 AND p.status IN ('awaiting_prime','carried')
+               ORDER BY p.id"""))
+
+
 def carried_pending_execution() -> list[dict]:
     """Signed-into-effect motions the keeper hasn't yet realized. This is the
     executive's in-tray: the Prime approved these, and Bill owes their
