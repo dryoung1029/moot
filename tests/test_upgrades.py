@@ -80,9 +80,13 @@ class TestGovernance(unittest.TestCase):
         actions.vote("Doc", tie, "nay", None)
         db.adjourn(mid, "done")
         statuses = {p["id"]: p["status"] for p in db.list_proposals(mid)}
-        self.assertEqual(statuses[win], "carried")
+        # The winner reached an aye majority (2 of 2) — it sits on the Prime's
+        # desk, because nothing carries without the signature.
+        self.assertEqual(statuses[win], "awaiting_prime")
         self.assertEqual(statuses[lose], "failed")
         self.assertEqual(statuses[tie], "failed")
+        actions.sign_proposal(win)
+        self.assertEqual(db.get_proposal(win)["status"], "carried")
 
     def test_reputation_weights_teaching_highest(self):
         db.add_insight("Doc", "Codey", "logging", None)      # Codey taught: +3
@@ -144,7 +148,8 @@ class TestSteward(unittest.TestCase):
             conn.execute("UPDATE votes SET created_at=?", (old,))
         self.assertEqual(steward.adjourn_stale(), [mid])
         self.assertEqual(db.get_moot(mid)["status"], "adjourned")
-        self.assertEqual(db.list_proposals(mid)[0]["status"], "carried")
+        # An aye lead at the gavel goes to the Prime's desk, not straight to law.
+        self.assertEqual(db.list_proposals(mid)[0]["status"], "awaiting_prime")
         posts = db.channel_posts("coordination", 0, 20)
         self.assertTrue(any(f"#{mid} adjourned" in (p["title"] or "") for p in posts))
 

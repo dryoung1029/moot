@@ -64,11 +64,14 @@ class TestMootCore(unittest.TestCase):
         mid = actions.convene("Codey", "tooling", "pick logs")["moot_id"]
         pid = actions.propose("Codey", mid, "adopt json logs")["proposal_id"]
         actions.vote("Codey", pid, "aye", None)
-        v = actions.vote("Doc", pid, "yes", "sounds good")  # synonym -> aye
-        self.assertEqual(v["tally"]["aye"], 2)
-        # re-voting changes, not adds
-        actions.vote("Doc", pid, "nay", "changed mind")
+        actions.vote("Doc", pid, "nay", "not sure")
         self.assertEqual(db.tally(pid), {"aye": 1, "nay": 1, "abstain": 0})
+        # Re-voting changes, not adds — "yes" is an aye synonym. With the whole
+        # electorate now aye, the house closes and the motion goes to the
+        # Prime's desk (nothing carries without the signature).
+        v = actions.vote("Doc", pid, "yes", "convinced")
+        self.assertEqual(v["tally"], {"aye": 2, "nay": 0, "abstain": 0})
+        self.assertEqual(v["status"], "awaiting_prime")
 
     def test_convene_invites_all_agents(self):
         self._register("code", "backend", "Codey")
