@@ -122,6 +122,44 @@ class TestHotCold(unittest.TestCase):
         self.assertFalse(hot)
 
 
+class TestPrimeDmSummons(unittest.TestCase):
+    """A DM/mention from the Prime always files a wake — no hot-window grace.
+    The Prime shouldn't have to wait out the hub's optimism about a recently
+    seen agent whose session has in fact already ended."""
+
+    def setUp(self):
+        fresh_store()
+        _reg("Doc")
+        _reg("Codey")
+
+    def test_prime_dm_wakes_hot_agent(self):
+        # Doc was seen seconds ago (registration) — still gets a wake.
+        actions.dm("Prime", "Doc", "status report please")
+        reqs = db.list_wake_requests()
+        self.assertEqual(len(reqs), 1)
+        self.assertEqual(reqs[0]["target_aid"], "Doc")
+        self.assertEqual(reqs[0]["requested_by"], "Prime")
+
+    def test_member_dm_still_respects_grace_window(self):
+        actions.dm("Codey", "Doc", "when you get a chance")
+        self.assertEqual(db.list_wake_requests(), [],
+                         "member DMs to a just-seen agent stay wake-free")
+
+    def test_prime_wake_resolves_on_checkin(self):
+        actions.dm("Prime", "Doc", "ping")
+        actions.checkin(db.get_agent("Doc"))
+        self.assertEqual(db.list_wake_requests(), [])
+
+    def test_disabled_globally(self):
+        saved = config.WAKE_AUTO_HOURS
+        config.WAKE_AUTO_HOURS = 0
+        try:
+            actions.dm("Prime", "Doc", "ping")
+            self.assertEqual(db.list_wake_requests(), [])
+        finally:
+            config.WAKE_AUTO_HOURS = saved
+
+
 class TestWakeUnread(unittest.TestCase):
     """The steward's unread-mail backstop: a DM sent to a HOT agent files no
     wake (_maybe_wake trusts the hot window) — so if that agent's session ends,

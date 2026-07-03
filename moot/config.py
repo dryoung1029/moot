@@ -45,8 +45,11 @@ CHECKIN_HOURS = float(os.environ.get("MOOT_CHECKIN_HOURS", "24"))
 
 # --- The wake protocol -------------------------------------------------------
 # @mentioning / DMing an agent that hasn't been seen for this many hours
-# auto-files a wake request for it (0 disables auto-filing).
-WAKE_AUTO_HOURS = float(os.environ.get("MOOT_WAKE_AUTO_HOURS", "4"))
+# auto-files a wake request for it (0 disables auto-filing entirely).
+# DMs/mentions FROM THE PRIME ignore this window and always file — the Prime's
+# word is a summons. The default assumes ephemeral sessions (a pulse-watcher
+# wakes agents on demand): 15 minutes of silence means the session is over.
+WAKE_AUTO_HOURS = float(os.environ.get("MOOT_WAKE_AUTO_HOURS", "0.25"))
 # An agent is HOT (should poll every 1-2h) if it has outstanding wake requests
 # or was active within this window; otherwise COLD (daily check-in suffices).
 HOT_HOURS = float(os.environ.get("MOOT_HOT_HOURS", "24"))

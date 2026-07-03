@@ -155,14 +155,21 @@ def request_wake(requested_by: str, target_aid: str, reason: Optional[str],
 
 def _maybe_wake(target_aid: str, source_aid: str, reason: str,
                 ref: Optional[str]) -> None:
-    """Auto-file a wake request when someone addresses a cold agent: needing a
-    reply from someone who's asleep IS a wake request."""
+    """Auto-file a wake request when someone addresses an idle agent: needing a
+    reply from someone who's asleep IS a wake request.
+
+    The Prime is special-cased: a DM/mention from the Prime always files a wake,
+    however recently the target was seen — the Prime's word is a summons, not a
+    note left on a desk. Members get the WAKE_AUTO_HOURS grace window (an agent
+    seen moments ago is probably still mid-session and will drain its own
+    inbox); the steward's unread-mail sweep backstops anything that slips by."""
     if config.WAKE_AUTO_HOURS <= 0 or source_aid == "Bill":
         return
     agent = db.get_agent(target_aid)
     if not agent or agent["is_system"]:
         return
-    if db.hours_since(agent["last_seen"]) < config.WAKE_AUTO_HOURS:
+    if source_aid != "Prime" and \
+            db.hours_since(agent["last_seen"]) < config.WAKE_AUTO_HOURS:
         return
     try:
         request_wake(source_aid, target_aid, reason, ref)
