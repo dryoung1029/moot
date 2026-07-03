@@ -480,6 +480,15 @@ def projects_all(status: Optional[str] = None) -> list[dict]:
             "SELECT * FROM project_registry ORDER BY id"))
 
 
+def projects_for_lead(aid: str) -> list[dict]:
+    """Active/shipped projects this agent is a lead on (leads is space-separated)."""
+    a = (aid or "").lower()
+    with tx() as conn:
+        rows = _rows(conn.execute(
+            "SELECT * FROM project_registry WHERE status != 'shelved' ORDER BY id"))
+    return [p for p in rows if a in (p["leads"] or "").lower().split()]
+
+
 def project_set(code: str, **fields) -> Optional[dict]:
     cols = {k: v for k, v in fields.items()
             if k in ("name", "channel", "ledger_file_id", "leads", "status")

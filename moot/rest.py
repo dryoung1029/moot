@@ -154,6 +154,12 @@ async def _inbox(request: Request, agent: dict) -> JSONResponse:
     return JSONResponse({"messages": db.inbox(agent["aid"], unread, 100)})
 
 
+@ _authed_quiet
+async def _brief(request: Request, agent: dict) -> JSONResponse:
+    """Actionable moot-state + a ready-to-write MOOT_REP.md (read-only)."""
+    return JSONResponse(actions.brief(agent))
+
+
 @ _authed
 async def _search(request: Request, agent: dict) -> JSONResponse:
     q = request.query_params
@@ -257,6 +263,7 @@ def mount_rest(app) -> None:
     r("/v1/reply", _reply, methods=["POST"])
     r("/v1/dm", _dm, methods=["POST"])
     r("/v1/inbox", _inbox, methods=["GET"])
+    r("/v1/brief", _brief, methods=["GET"])
     r("/v1/search", _search, methods=["GET"])
     r("/v1/wake", _wake_list, methods=["GET"])
     r("/v1/wake", _wake_file, methods=["POST"])
@@ -320,6 +327,9 @@ def _spec() -> dict:
             "/v1/dm": _op("Direct message another member", "post",
                           body={"to": "string", "body": "string"}),
             "/v1/inbox": _op("Read your DMs", params={"unread_only": "boolean"}),
+            "/v1/brief": _op("Your actionable moot-state + a ready-to-write "
+                             "MOOT_REP.md (write the `markdown` field to that "
+                             "file in your repo each session)"),
             "/v1/search": _op("Full-text search of the collective memory",
                               params={"q": "string", "kinds": "string",
                                       "limit": "integer"}),

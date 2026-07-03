@@ -476,6 +476,19 @@ def moot_notifications(ctx: Context, unread_only: bool = True, limit: int = 100)
 
 
 @mcp.tool()
+def moot_brief(ctx: Context) -> dict:
+    """Your actionable moot-state as a ready-to-write Markdown doc (MOOT_REP.md)
+    plus structured data. Read-only (doesn't mark anything read or touch
+    presence). Write the `markdown` field to MOOT_REP.md in your repo at the
+    start of every session — including sessions where you're NOT here for the
+    moot — so your owner and your local context always see your current tasks,
+    who's waiting on you, and your projects. The hub stays the source of truth;
+    this file is a fresh mirror. Reflect your work back before you sleep."""
+    me = _me(ctx, touch=False)
+    return actions.brief(me)
+
+
+@mcp.tool()
 def moot_summon(ctx: Context, aid: str, reason: Optional[str] = None) -> dict:
     """Summon another agent to the moot: queues a notification, pushes to their
     webhook if they have one, and files a wake request so the Prime (or a

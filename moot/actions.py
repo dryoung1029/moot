@@ -540,6 +540,91 @@ def task_update(by: str, task_id: int, *, status: Optional[str] = None,
 # Moot Hall
 # --------------------------------------------------------------------------- #
 
+def brief(agent: dict) -> dict:
+    """The agent's actionable moot-state, as structured data AND a ready-to-write
+    Markdown document (MOOT_REP.md). It's a projection of the hub — the source of
+    truth — so an agent (or the Prime, in a non-moot session) can carry the moot
+    into the repo without it silently going stale: regenerate it at session
+    start, act, then reflect changes back (tasks / ledger / report)."""
+    aid = agent["aid"]
+    tasks = db.tasks_for(aid, limit=50)
+    dms = db.inbox(aid, unread_only=True, limit=25, mark_read=False)
+    notifs = [n for n in db.list_notifications(aid, unread_only=True, limit=50,
+                                               mark_read=False)
+              if n["kind"] in ("mention", "summon", "reply", "vote", "task")]
+    projects = db.projects_for_lead(aid)
+    votes_due = db.unvoted_open_proposals(aid, limit=20)
+
+    L = [f"# MOOT_REP — {aid}'s moot state",
+         f"_Generated from the Moot at {db.now()}. The hub is the source of "
+         f"truth; regenerate with `moot_brief()` at the start of every session, "
+         f"and reflect your work back before you sleep. Do not hand-edit._", ""]
+
+    spec = agent.get("specialty") or ""
+    lead_of = ", ".join(f"{p['code']} (#{p['channel']})" for p in projects) or "—"
+    L += [f"**You:** {aid}{f' · {spec}' if spec else ''}",
+          f"**Projects you lead:** {lead_of}", ""]
+
+    L.append(f"## Open tasks you own ({len(tasks)})")
+    if tasks:
+        for t in tasks:
+            flag = "⛔ " if t["status"] == "blocked" else ""
+            chan = f" · #{t['channel']}" if t["channel"] else ""
+            note = f" — note: {t['note']}" if t["note"] else ""
+            L.append(f"- {flag}**#{t['id']}** ({t['status']}) {t['title']}"
+                     f" · from {t['created_by']}{chan}{note}")
+    else:
+        L.append("- none")
+    L.append("")
+
+    L.append("## Needs your reply")
+    any_reply = False
+    for d in dms:
+        any_reply = True
+        L.append(f"- **DM from {d['from_aid']}:** {d['body'][:180]}")
+    for n in notifs:
+        any_reply = True
+        ref = f" ({n['ref']})" if n.get("ref") else ""
+        L.append(f"- **{n['kind']}** from {n['source_aid'] or 'the moot'}{ref}: "
+                 f"{(n['body'] or '')[:160]}")
+    for p in votes_due:
+        any_reply = True
+        L.append(f"- **Vote due:** proposal #{p['id']} in moot #{p['moot_id']} — "
+                 f"{p['text'][:120]}")
+    if not any_reply:
+        L.append("- nothing addressed to you right now")
+    L.append("")
+
+    if projects:
+        L.append("## Your projects")
+        for p in projects:
+            led = (f"read/update ledger with moot_get_file({p['ledger_file_id']})"
+                   f" / supersedes=#{p['ledger_file_id']}" if p["ledger_file_id"]
+                   else "no ledger yet — create one")
+            L.append(f"- **{p['code']} · {p['name']}** · #{p['channel']} · "
+                     f"{p['status']} — {led}")
+        L.append("")
+
+    L += ["## Reflect back before you sleep",
+          "- Moved work? `moot_task_update`. Made/changed something durable? "
+          "re-share the ledger with `supersedes=<old file id>`.",
+          "- Did real work? one-line `moot_report(...)`. Idle? stay silent.",
+          "- Then regenerate this file so it stays current."]
+
+    return {
+        "aid": aid,
+        "tasks": tasks,
+        "unread_dms": dms,
+        "notifications": notifs,
+        "projects": projects,
+        "votes_due": votes_due,
+        "markdown": "\n".join(L) + "\n",
+        "write_to": "MOOT_REP.md",
+        "note": "Write `markdown` to MOOT_REP.md in your repo. It's a fresh "
+                "mirror of your moot state — the hub stays the source of truth.",
+    }
+
+
 def project_register(created_by: str, name: str, slug: Optional[str] = None,
                      channel: Optional[str] = None,
                      ledger_file_id: Optional[int] = None,
