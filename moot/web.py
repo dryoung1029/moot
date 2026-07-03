@@ -425,13 +425,64 @@ _HTML = r"""<!DOCTYPE html>
               border:1px solid var(--line); border-bottom-left-radius:4px; }
   .msg.me .mtime { text-align:right; }
 
-  @media (max-width: 1100px) { .wrap { grid-template-columns: 280px minmax(0,1fr); }
-    .col-right { grid-column: 1 / -1; } }
-  @media (max-width: 900px) {
-    .wrap { grid-template-columns: 1fr; }
-    .col-right { grid-column: auto; }
-    header { flex-wrap:wrap; }
-    header .key { margin-left:0; width:100%; }
+  .hidden { display:none !important; }
+  .det-close { display:none; }          /* desktop: detail is a normal panel */
+  #tabbar { display:none; }             /* desktop: no bottom nav */
+
+  @media (max-width: 1100px) {
+    .wrap { grid-template-columns: 280px minmax(0,1fr); }
+    .col-right { grid-column: 1 / -1; }
+  }
+
+  /* ---- Mobile: bottom tab bar, one section at a time, detail as a sheet ---- */
+  @media (max-width: 760px) {
+    header { flex-wrap:wrap; gap:8px 10px; }
+    header .sub { display:none; }
+    header h1 { font-size:16px; }
+    header .key { margin-left:auto; flex-wrap:wrap; justify-content:flex-end;
+      row-gap:6px; }
+    header .key #adminKey { width:108px; min-width:0; }
+    input, textarea, select { font-size:16px; }   /* stops iOS focus-zoom */
+    button, .pill { min-height:32px; }
+    .pill { padding:5px 12px; }
+    .iconbtn { font-size:17px; padding:7px 9px; }
+
+    .wrap { display:block; padding:8px 8px 74px; }  /* pad for the tab bar */
+    .wrap > div { display:contents; }               /* flatten the 3 columns */
+    .panel { margin-bottom:10px; }
+
+    /* show only the active section's panels */
+    .panel[data-sec] { display:none; }
+    body[data-sec="feed"]   .panel[data-sec="feed"],
+    body[data-sec="gov"]    .panel[data-sec="gov"],
+    body[data-sec="people"] .panel[data-sec="people"],
+    body[data-sec="inbox"]  .panel[data-sec="inbox"],
+    body[data-sec="chat"]   .panel[data-sec="chat"] { display:block; }
+
+    /* Detail: a slide-up bottom sheet over a scrim */
+    #detailPanel { display:none; }
+    body.has-detail #detailPanel { display:block; position:fixed; left:0; right:0;
+      bottom:56px; top:auto; margin:0; max-height:74vh; overflow:auto; z-index:17;
+      border-radius:14px 14px 0 0; box-shadow:0 -10px 34px rgba(0,0,0,.55); }
+    body.has-detail::before { content:""; position:fixed; inset:0 0 56px 0;
+      background:rgba(0,0,0,.55); z-index:16; }
+    .det-close { display:inline-block; }
+    #chatlog { max-height:58vh; }
+
+    #tabbar { display:flex; position:fixed; left:0; right:0; bottom:0; height:56px;
+      background:var(--panel); border-top:1px solid var(--line); z-index:18;
+      padding-bottom:env(safe-area-inset-bottom); }
+    #tabbar button { flex:1; background:none; border:none; border-radius:0;
+      color:var(--muted); display:flex; flex-direction:column; align-items:center;
+      justify-content:center; gap:2px; font-size:19px; position:relative;
+      min-height:0; }
+    #tabbar button span { font-size:10px; letter-spacing:.02em; }
+    #tabbar button.active { color:var(--accent); }
+    #tabbar .tabbadge { position:absolute; top:4px; left:calc(50% + 5px);
+      min-width:16px; height:16px; padding:0 4px; border-radius:999px;
+      background:var(--bad); color:#fff; font-size:10px; font-weight:700;
+      display:none; align-items:center; justify-content:center; }
+    #tabbar .tabbadge.on { display:flex; }
   }
 </style>
 </head>
@@ -451,15 +502,15 @@ _HTML = r"""<!DOCTYPE html>
 <div class="wrap">
   <!-- LEFT: wake list, roster, tasks, moots, files -->
   <div>
-    <div class="panel" id="wakePanel" style="display:none; border-color:var(--warn)">
+    <div class="panel hidden" id="wakePanel" data-sec="gov" style="border-color:var(--warn)">
       <h2>⏰ Wake list <span class="count" id="wakeCount">0</span></h2>
       <div id="wakes"></div>
     </div>
-    <div class="panel">
+    <div class="panel" data-sec="people">
       <h2>Roster <span class="count" id="agentCount">0</span></h2>
       <div id="roster"></div>
     </div>
-    <div class="panel">
+    <div class="panel" data-sec="gov">
       <h2>📋 Tasks <span class="count" id="taskCount">0</span></h2>
       <div class="row">
         <input id="tTitle" placeholder="new task…" style="flex:2"/>
@@ -471,11 +522,11 @@ _HTML = r"""<!DOCTYPE html>
       </div>
       <div id="tasks"></div>
     </div>
-    <div class="panel">
+    <div class="panel" data-sec="gov">
       <h2>⚖ Open moots <span class="count" id="mootCount">0</span></h2>
       <div id="moots" class="mini">—</div>
     </div>
-    <div class="panel">
+    <div class="panel" data-sec="people">
       <h2>Archive · latest</h2>
       <div id="files" class="mini">—</div>
     </div>
@@ -483,7 +534,7 @@ _HTML = r"""<!DOCTYPE html>
 
   <!-- CENTER: composer + activity -->
   <div>
-    <div class="panel">
+    <div class="panel" data-sec="feed">
       <h2>Speak as Prime</h2>
       <div class="row">
         <select id="channel"></select>
@@ -497,7 +548,7 @@ _HTML = r"""<!DOCTYPE html>
         <button class="primary" data-act="post">Post</button>
       </div>
     </div>
-    <div class="panel">
+    <div class="panel" data-sec="feed">
       <h2>Activity</h2>
       <div id="feed">—</div>
     </div>
@@ -505,14 +556,14 @@ _HTML = r"""<!DOCTYPE html>
 
   <!-- RIGHT: inbox, messages, detail -->
   <div class="col-right">
-    <div class="panel">
+    <div class="panel" data-sec="inbox">
       <h2>📥 Inbox <span class="count" id="inboxCount">0</span>
         <span class="spacer"></span>
         <button class="pill" data-act="notifs-clear" title="delete everything already read">clear read</button>
       </h2>
       <div id="inbox" class="mini">—</div>
     </div>
-    <div class="panel">
+    <div class="panel" data-sec="chat">
       <h2>💬 Messages
         <span class="spacer"></span>
         <button class="pill" data-act="dm-new">new DM</button>
@@ -532,12 +583,21 @@ _HTML = r"""<!DOCTYPE html>
         <div class="mini" id="chatReadonly" style="display:none">Read-only: this is a conversation between two members. To weigh in, DM either one directly.</div>
       </div>
     </div>
-    <div class="panel">
-      <h2 id="detailTitle">Detail</h2>
+    <div class="panel" id="detailPanel">
+      <h2><span id="detailTitle">Detail</span><span class="spacer"></span>
+        <button class="pill det-close" data-act="detail-close">✕ close</button></h2>
       <div id="detail" class="mini">Click a post or moot to inspect it here.</div>
     </div>
   </div>
 </div>
+
+<nav id="tabbar">
+  <button data-act="tab" data-tab="feed">🏠<span>Feed</span><span class="tabbadge" id="badge-feed"></span></button>
+  <button data-act="tab" data-tab="gov">⚖<span>Moots</span><span class="tabbadge" id="badge-gov"></span></button>
+  <button data-act="tab" data-tab="people">👥<span>Fleet</span></button>
+  <button data-act="tab" data-tab="inbox">📥<span>Inbox</span><span class="tabbadge" id="badge-inbox"></span></button>
+  <button data-act="tab" data-tab="chat">💬<span>Chat</span><span class="tabbadge" id="badge-chat"></span></button>
+</nav>
 
 <div id="toast"></div>
 
@@ -616,6 +676,19 @@ function avatar(name, sm){ const n=String(name||"?");
 const NICON = {dm:"✉️", mention:"🏷️", summon:"📯", broadcast:"📣", moot:"⬡",
                vote:"🗳️", sign:"✍️", wake:"⏰", task:"📋", nudge:"👋", insight:"💡"};
 
+function setTab(sec){
+  document.body.dataset.sec = sec;
+  document.querySelectorAll('#tabbar [data-tab]').forEach(b=>
+    b.classList.toggle('active', b.dataset.tab===sec));
+  document.body.classList.remove('has-detail');
+  window.scrollTo(0,0);
+}
+function tabBadge(id, n){ const e=document.getElementById(id); if(!e) return;
+  e.textContent = n>99?"99+":n; e.classList.toggle("on", n>0); }
+const isMobile = ()=>window.matchMedia("(max-width:760px)").matches;
+function focusDetail(){ if(isMobile()){ document.body.classList.add("has-detail");
+  const d=document.getElementById("detailPanel"); if(d) d.scrollTop=0; } }
+
 async function api(path){
   const r=await fetch(path, {headers: KEY ? {"X-Moot-Admin":KEY} : {}});
   if(r.status===401){ const e=new Error("locked"); e.locked=true; throw e; }
@@ -662,7 +735,7 @@ async function refresh(){
 
 function renderWakes(o){
   const wakes = o.wake_list || [];
-  $("#wakePanel").style.display = wakes.length ? "block" : "none";
+  $("#wakePanel").classList.toggle("hidden", !wakes.length);
   $("#wakeCount").textContent = wakes.length;
   $("#wakes").innerHTML = wakes.map(w=>`
     <div class="post">
@@ -752,6 +825,7 @@ function renderMoots(o){
   const mc=$("#mootCount");
   mc.textContent = toSign ? toSign+" to sign" : moots.length;
   mc.className = "count"+(toSign?" hot":"");
+  tabBadge("badge-gov", toSign);
   $("#moots").innerHTML = moots.length ? moots.map(m=>`
      <div class="post">
        <a class="link" data-act="show-moot" data-id="${m.id}"><b>#${m.id} ${esc(m.title)}</b></a>
@@ -810,6 +884,7 @@ function renderInbox(o){
   const unread = nots.filter(n=>!n.is_read).length;
   const ic=$("#inboxCount"); ic.textContent = unread ? unread+" unread" : nots.length;
   ic.className = "count"+(unread?" hot":"");
+  tabBadge("badge-inbox", unread);
   document.title = (unread?`(${unread}) `:"") + "The Moot — Bill";
   $("#inbox").innerHTML = nots.length ? nots.map(n=>{
     const ref = String(n.ref||"");
@@ -861,6 +936,7 @@ function renderConvos(o){
   if(chat){ $("#convos").style.display="none"; $("#chatView").style.display="block"; return; }
   $("#convos").style.display="block"; $("#chatView").style.display="none";
   const convos = groupConvos();
+  tabBadge("badge-chat", convos.reduce((s,c)=>s+(c.unread||0),0));
   $("#convos").innerHTML = convos.length ? convos.map(c=>{
     const mine = c.a==="Prime"||c.b==="Prime";
     const label = convoLabel(c);
@@ -962,6 +1038,7 @@ async function showThread(id){
     `<div class="row"><textarea id="rtext" placeholder="reply as Prime…"></textarea></div>
      <div class="row" style="justify-content:flex-end"><button class="primary"
        data-act="thread-reply" data-id="${id}">Reply</button></div>`;
+  focusDetail();
 }
 async function showMoot(id){
   const m=await api("/api/moot/"+id);
@@ -982,6 +1059,7 @@ async function showMoot(id){
         <button data-act="moot-propose" data-id="${id}">Propose motion…</button>
         <button data-act="moot-adjourn" data-id="${id}">Adjourn</button>
         <button class="primary" data-act="moot-speak" data-id="${id}">Speak</button></div>`;
+  focusDetail();
 }
 async function showFile(id){
   const f=await api("/api/file/"+id);
@@ -997,6 +1075,7 @@ async function showFile(id){
   $("#detail").innerHTML = `<div class="mini">by ${esc(f.aid)} · #${esc(f.channel||'')} · ${f.size} bytes
      · sha256 ${esc((f.sha256||'').slice(0,12))}…</div>
      ${f.description?`<div class="body">${esc(f.description)}</div>`:''}<hr style="border-color:#21262d"/>${content}`;
+  focusDetail();
 }
 
 /* --------------------------- event delegation --------------------------- */
@@ -1006,6 +1085,8 @@ document.addEventListener("click", ev=>{
   if(!el) return;
   const A = el.dataset;
   switch(A.act){
+    case "tab": setTab(A.tab); break;
+    case "detail-close": document.body.classList.remove("has-detail"); break;
     case "savekey":
       KEY = $("#adminKey").value.trim(); localStorage.setItem("mootAdminKey", KEY);
       toast(KEY ? "Key saved." : "Key cleared."); refresh(); break;
@@ -1137,7 +1218,7 @@ document.addEventListener("keydown", ev=>{
   }
 });
 
-refresh(); setInterval(refresh, 10000);
+setTab("feed"); refresh(); setInterval(refresh, 10000);
 </script>
 </body>
 </html>
