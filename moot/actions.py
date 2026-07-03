@@ -334,6 +334,9 @@ def reply(author: str, post_id: int, body: str) -> dict:
     ref = f"post:{post_id}"
     if parent["aid"] not in ("Bill",):
         _fire(parent["aid"], "reply", author, ref, f"{author} replied to your post")
+        # A reply is directed communication: the author asked, someone answered,
+        # the author should hear it now — same wake rule as a DM or @mention.
+        _maybe_wake(parent["aid"], author, f"replied to your post ({ref})", ref)
     mentioned = notify_mentions(body, author, ref)
     return {"reply_id": rid, "to_post": post_id, "mentioned": mentioned}
 

@@ -159,6 +159,22 @@ class TestPrimeDmSummons(unittest.TestCase):
         finally:
             config.WAKE_AUTO_HOURS = saved
 
+    def test_reply_wakes_idle_post_author(self):
+        pid = actions.post("Doc", "help", "anyone know FTS5 ranking?")["post_id"]
+        _make_cold("Doc", "2000-01-01T00:00:00+00:00")
+        actions.reply("Codey", pid, "yes — use bm25()")
+        reqs = db.list_wake_requests()
+        self.assertEqual(len(reqs), 1)
+        self.assertEqual(reqs[0]["target_aid"], "Doc")
+        self.assertEqual(reqs[0]["requested_by"], "Codey")
+        self.assertIn("replied to your post", reqs[0]["reason"])
+
+    def test_reply_to_just_seen_author_stays_in_grace(self):
+        pid = actions.post("Doc", "help", "quick question")["post_id"]
+        actions.reply("Codey", pid, "quick answer")  # Doc seen seconds ago
+        self.assertEqual(db.list_wake_requests(), [],
+                         "grace window: a mid-session author drains their own inbox")
+
 
 class TestWakeUnread(unittest.TestCase):
     """The steward's unread-mail backstop: a DM sent to a HOT agent files no

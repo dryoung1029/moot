@@ -344,6 +344,10 @@ _HTML = r"""<!DOCTYPE html>
   .body.clamp { max-height:132px; overflow:hidden; position:relative; }
   .body.clamp::after { content:""; position:absolute; left:0; right:0; bottom:0;
           height:36px; background:linear-gradient(transparent, var(--panel)); }
+  .thread { margin:8px 0 0 14px; padding-left:12px; border-left:2px solid var(--line); }
+  .reply { padding:6px 0; }
+  .reply + .reply { border-top:1px solid #21262d; }
+  .thread textarea { min-height:40px; }
 
   /* rendered markdown */
   .body a, .msg a, .nbody a { color:var(--accent); }
@@ -525,6 +529,7 @@ let PMODE = "on";
 let OV = null;                       // last /api/overview payload
 const openAgents = new Set();        // roster cards left expanded
 const expandedPosts = new Set();     // feed cards un-clamped
+const expandedThreads = new Set();   // feed cards with replies unfolded inline
 let chat = null;                     // open conversation: {a, b} (a = focus)
 let dmDraftOpen = false;
 
@@ -746,13 +751,15 @@ function renderFeed(o){
         <span class="chan">#${esc(p.channel)}</span>
         ${p.pinned?'📌':''}
         <span title="${esc(when(p.created_at))}">${ago(p.created_at)}</span>
-        · <a class="link" data-act="show-thread" data-id="${p.id}">${p.replies?`${p.replies} repl${p.replies==1?'y':'ies'}`:'reply'}</a>
+        · <a class="link" data-act="thread-toggle" data-id="${p.id}">${p.replies?`💬 ${p.replies} repl${p.replies==1?'y':'ies'}`:'reply'} ${expandedThreads.has(p.id)?'▾':'▸'}</a>
         ${KEY?` · <a class="link" data-act="pin" data-id="${p.id}" data-pinned="${p.pinned?1:0}">${p.pinned?'unpin':'pin'}</a>`:''}
       </div>
       ${p.title?`<div><b>${esc(p.title)}</b></div>`:''}
       <div class="body ${long&&!expanded?'clamp':''}">${md(p.body)}</div>
       ${long?`<a class="link mini" data-act="post-more" data-id="${p.id}">${expanded?'show less':'show more'}</a>`:''}
+      ${expandedThreads.has(p.id)?`<div class="thread" id="th-${p.id}"><div class="mini">loading…</div></div>`:''}
     </div>`;}).join("") || "Quiet so far.";
+  for(const id of expandedThreads) loadThread(id);
 }
 
 function renderInbox(o){
@@ -880,6 +887,24 @@ function openChat(a, b){
   renderInbox(OV||{prime_inbox:{notifications:[]}});
 }
 
+async function loadThread(id){
+  const box = document.getElementById("th-"+id);
+  if(!box) return;
+  let t;
+  try{ t = await api("/api/thread/"+id); } catch(e){ return; }
+  const draft = box.querySelector("textarea") ? box.querySelector("textarea").value : "";
+  box.innerHTML = (t.replies||[]).map(r=>`
+    <div class="reply">
+      <div class="meta">${avatar(r.aid,true)} <span class="who">${esc(r.aid)}</span>
+        <span class="tag" title="${esc(when(r.created_at))}">${ago(r.created_at)}</span></div>
+      <div class="body">${md(r.body)}</div>
+    </div>`).join("") +
+    (KEY?`<div class="row"><textarea id="rt-${id}" placeholder="reply as Prime…"></textarea>
+      <button class="primary" data-act="reply-inline" data-id="${id}" style="flex:0 0 auto; align-self:flex-end">Reply</button></div>`:"");
+  const ta = document.getElementById("rt-"+id);
+  if(ta && draft) ta.value = draft;
+}
+
 /* ------------------------------ details --------------------------------- */
 
 async function showThread(id){
@@ -992,6 +1017,16 @@ document.addEventListener("click", ev=>{
       if(expandedPosts.has(+A.id)) expandedPosts.delete(+A.id); else expandedPosts.add(+A.id);
       if(OV) renderFeed(OV); break;
     case "show-thread": showThread(+A.id); break;
+    case "thread-toggle":
+      if(expandedThreads.has(+A.id)) expandedThreads.delete(+A.id); else expandedThreads.add(+A.id);
+      if(OV) renderFeed(OV); break;
+    case "reply-inline": {
+      const ta=document.getElementById("rt-"+A.id);
+      const body=ta?ta.value.trim():"";
+      if(!body){ toast("Write the reply."); break; }
+      act({action:'reply', post_id:+A.id, body}, {quiet:true, norefresh:true})
+        .then(r=>{ if(r){ toast("✓ replied"); refresh(); } });
+      break; }
     case "show-moot": showMoot(+A.id); break;
     case "show-file": showFile(+A.id); break;
     case "thread-reply":
