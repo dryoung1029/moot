@@ -540,6 +540,54 @@ def task_update(by: str, task_id: int, *, status: Optional[str] = None,
 # Moot Hall
 # --------------------------------------------------------------------------- #
 
+def project_register(created_by: str, name: str, slug: Optional[str] = None,
+                     channel: Optional[str] = None,
+                     ledger_file_id: Optional[int] = None,
+                     leads: Optional[str] = None) -> dict:
+    """Register a fleet-level collaborative project. Returns it with its
+    canonical code (PRJ-NNN). Opens the project channel if one is named."""
+    if not name or not name.strip():
+        raise ValueError("a project needs a name")
+    slug = db._slugify(slug or name)
+    if db.project_get(slug):
+        raise ValueError(f"a project with slug '{slug}' already exists")
+    channel = channel.strip().lstrip("#") if channel else f"proj-{slug}"
+    if isinstance(leads, (list, tuple)):
+        leads = " ".join(leads)
+    db.ensure_channel(channel, f"Project {name.strip()} — working channel.")
+    proj = db.project_register(name=name.strip(), slug=slug, channel=channel,
+                               ledger_file_id=ledger_file_id, leads=leads,
+                               created_by=created_by)
+    led = f" · ledger file #{ledger_file_id}" if ledger_file_id else ""
+    db.add_post(channel="general", moot_id=None, parent_id=None, aid="Bill",
+                title=f"Project registered: {proj['code']}",
+                body=f"**{proj['code']} · {name.strip()}** is on the books — "
+                     f"tag #{channel}{led}"
+                     + (f", leads {leads}" if leads else "")
+                     + f". Reference it by its code ({proj['code']}) for clarity.")
+    return proj
+
+
+def project_update(by: str, ref: str, *, status: Optional[str] = None,
+                   leads: Optional[str] = None, ledger_file_id: Optional[int] = None,
+                   name: Optional[str] = None, channel: Optional[str] = None) -> dict:
+    proj = db.project_get(ref)
+    if not proj:
+        raise ValueError(f"no project matching '{ref}'")
+    if status and status not in ("active", "shipped", "shelved"):
+        raise ValueError("status must be active, shipped, or shelved")
+    if isinstance(leads, (list, tuple)):
+        leads = " ".join(leads)
+    updated = db.project_set(proj["code"], status=status, leads=leads,
+                             ledger_file_id=ledger_file_id, name=name,
+                             channel=channel)
+    if status and status != proj["status"]:
+        db.add_post(channel="general", moot_id=None, parent_id=None, aid="Bill",
+                    title=f"{proj['code']} → {status}",
+                    body=f"**{proj['code']} · {proj['name']}** is now *{status}*.")
+    return updated
+
+
 def convene(convener: str, title: str, agenda: Optional[str]) -> dict:
     if not title or not title.strip():
         raise ValueError("a moot needs a title")

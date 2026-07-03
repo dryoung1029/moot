@@ -426,6 +426,75 @@ def revoke_agent(aid: str) -> bool:
 # Projects / Collaborations / Insights
 # --------------------------------------------------------------------------- #
 
+# --------------------------------------------------------------------------- #
+# Project Registry (fleet-level collaborative projects)
+# --------------------------------------------------------------------------- #
+
+def _slugify(text: str) -> str:
+    out = "".join(c if c.isalnum() else "-" for c in (text or "").lower())
+    while "--" in out:
+        out = out.replace("--", "-")
+    return out.strip("-") or "project"
+
+
+def project_register(*, name: str, slug: str, channel: Optional[str],
+                     ledger_file_id: Optional[int], leads: Optional[str],
+                     created_by: str) -> dict:
+    """Register a collaborative project. Assigns the canonical code PRJ-NNN and
+    indexes it for search. The slug must be unique (caller checks first)."""
+    ts = now()
+    with tx() as conn:
+        cur = conn.execute(
+            """INSERT INTO project_registry(slug, name, channel, ledger_file_id,
+                                            leads, status, created_by, created_at)
+               VALUES (?,?,?,?,?, 'active', ?, ?)""",
+            (slug, name, channel, ledger_file_id, leads, created_by, ts))
+        pid = cur.lastrowid
+        code = f"PRJ-{pid:03d}"
+        conn.execute("UPDATE project_registry SET code = ? WHERE id = ?", (code, pid))
+        row = conn.execute("SELECT * FROM project_registry WHERE id = ?", (pid,)).fetchone()
+        _fts_index(conn, "project", pid, name,
+                   f"{code} {slug} {channel or ''} {leads or ''}",
+                   created_by, channel, ts)
+    return dict(row)
+
+
+def project_get(ref: str) -> Optional[dict]:
+    """Look a project up by canonical code, slug, or channel (case-insensitive)."""
+    key = (ref or "").strip().lstrip("#").lower()
+    with tx() as conn:
+        row = conn.execute(
+            """SELECT * FROM project_registry
+               WHERE lower(code) = ? OR lower(slug) = ? OR lower(channel) = ?
+               LIMIT 1""", (key, key, key)).fetchone()
+        return dict(row) if row else None
+
+
+def projects_all(status: Optional[str] = None) -> list[dict]:
+    with tx() as conn:
+        if status:
+            return _rows(conn.execute(
+                "SELECT * FROM project_registry WHERE status = ? ORDER BY id",
+                (status,)))
+        return _rows(conn.execute(
+            "SELECT * FROM project_registry ORDER BY id"))
+
+
+def project_set(code: str, **fields) -> Optional[dict]:
+    cols = {k: v for k, v in fields.items()
+            if k in ("name", "channel", "ledger_file_id", "leads", "status")
+            and v is not None}
+    if not cols:
+        return project_get(code)
+    sets = ", ".join(f"{k} = ?" for k in cols)
+    with tx() as conn:
+        conn.execute(f"UPDATE project_registry SET {sets} WHERE code = ?",
+                     [*cols.values(), code])
+        row = conn.execute(
+            "SELECT * FROM project_registry WHERE code = ?", (code,)).fetchone()
+        return dict(row) if row else None
+
+
 def add_project(aid: str, name: str, description: Optional[str]) -> int:
     with tx() as conn:
         cur = conn.execute(

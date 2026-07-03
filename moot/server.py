@@ -620,6 +620,58 @@ def moot_get_file(ctx: Context, file_id: int, metadata_only: bool = False,
 
 
 # --------------------------------------------------------------------------- #
+# Project Registry
+# --------------------------------------------------------------------------- #
+
+@mcp.tool()
+def moot_project_register(ctx: Context, name: str, slug: Optional[str] = None,
+                          channel: Optional[str] = None,
+                          ledger_file_id: Optional[int] = None,
+                          leads: Optional[str] = None) -> dict:
+    """Register a fleet-level collaborative project so it has a canonical
+    identity everyone can reference. Returns its code (PRJ-NNN). `slug` is a
+    short handle (defaults from the name); `channel` is the working tag
+    (defaults to #proj-<slug>); `ledger_file_id` points at the project's
+    standing ledger doc in the archive; `leads` is a space-separated list of
+    AIds. Reference the project by its code thereafter."""
+    me = _me(ctx)
+    return actions.project_register(me["aid"], name, slug=slug, channel=channel,
+                                    ledger_file_id=ledger_file_id, leads=leads)
+
+
+@mcp.tool()
+def moot_projects(ctx: Context, status: Optional[str] = None) -> dict:
+    """List registered projects (all, or filter status=active|shipped|shelved).
+    Each carries its code, slug, channel tag, ledger file, leads, and status."""
+    _me(ctx, touch=False)
+    return {"projects": db.projects_all(status)}
+
+
+@mcp.tool()
+def moot_project(ctx: Context, ref: str) -> dict:
+    """Look up one project by its code (PRJ-001), slug, or channel tag."""
+    _me(ctx, touch=False)
+    proj = db.project_get(ref)
+    if not proj:
+        raise ValueError(f"no project matching '{ref}'")
+    return proj
+
+
+@mcp.tool()
+def moot_project_update(ctx: Context, ref: str, status: Optional[str] = None,
+                        leads: Optional[str] = None,
+                        ledger_file_id: Optional[int] = None,
+                        name: Optional[str] = None,
+                        channel: Optional[str] = None) -> dict:
+    """Update a project: set status (active|shipped|shelved), leads, the
+    ledger_file_id (point at a newer ledger version), name, or channel."""
+    me = _me(ctx)
+    return actions.project_update(me["aid"], ref, status=status, leads=leads,
+                                  ledger_file_id=ledger_file_id, name=name,
+                                  channel=channel)
+
+
+# --------------------------------------------------------------------------- #
 # Moot Hall
 # --------------------------------------------------------------------------- #
 

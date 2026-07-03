@@ -74,6 +74,7 @@ async def _overview(request: Request) -> JSONResponse:
         "majority": db.electorate_size() // 2 + 1,
         "decisions": [{**p, "tally": db.member_tally(p["id"])}
                       for p in db.decisions_awaiting()],
+        "projects": db.projects_all(),
         "files": db.list_files(None, None, 20),
         "prime_inbox": {
             "notifications": db.list_notifications("Prime", unread_only=False,
@@ -187,6 +188,19 @@ async def _act(request: Request) -> JSONResponse:
                                data.get("rationale"))
         elif action in ("sign", "execute"):
             out = actions.execute_proposal(int(data["proposal_id"]))
+        elif action == "project_register":
+            out = actions.project_register(
+                P, data["name"], slug=data.get("slug") or None,
+                channel=data.get("channel") or None,
+                ledger_file_id=(int(data["ledger_file_id"])
+                                if data.get("ledger_file_id") else None),
+                leads=data.get("leads") or None)
+        elif action == "project_update":
+            out = actions.project_update(
+                P, data["ref"], status=data.get("status"),
+                leads=data.get("leads"),
+                ledger_file_id=(int(data["ledger_file_id"])
+                                if data.get("ledger_file_id") else None))
         elif action == "veto":
             out = actions.veto_proposal(int(data["proposal_id"]),
                                         data.get("reason"))
@@ -537,6 +551,13 @@ _HTML = r"""<!DOCTYPE html>
       <h2>Archive · latest</h2>
       <div id="files" class="mini">—</div>
     </div>
+    <div class="panel" data-sec="people">
+      <h2>📁 Projects <span class="count" id="projCount">0</span>
+        <span class="spacer"></span>
+        <button class="pill" data-act="project-new">＋ register</button>
+      </h2>
+      <div id="projects" class="mini">—</div>
+    </div>
   </div>
 
   <!-- CENTER: composer + activity -->
@@ -736,7 +757,7 @@ async function refresh(){
     ? `Mute the fleet's personas (equivalent of saying “${o.safe_word||'GUPPI mode'}” to everyone)`
     : "Personas are muted fleet-wide — click to wake them";
   renderWakes(o); renderTasks(o); renderRoster(o); renderChannels(o);
-  renderDecisions(o); renderMoots(o); renderFiles(o); renderFeed(o); renderInbox(o); renderConvos(o);
+  renderDecisions(o); renderMoots(o); renderFiles(o); renderProjects(o); renderFeed(o); renderInbox(o); renderConvos(o);
   if(chat) renderChat();   // keep an open chat live
 }
 
@@ -877,6 +898,18 @@ function renderFiles(o){
      <div><a class="link" data-act="show-file" data-id="${f.id}">${esc(f.filename)}</a>
      <span class="tag">#${f.id} · ${esc(f.channel||'')} · by ${esc(f.aid)}</span></div>`).join("")
      : "Empty.";
+}
+
+function renderProjects(o){
+  const ps = o.projects || [];
+  $("#projCount").textContent = ps.length;
+  $("#projects").innerHTML = ps.length ? ps.map(p=>`
+    <div class="post">
+      <b>${esc(p.code)}</b> ${esc(p.name)}
+      <span class="tag">${p.channel?('#'+esc(p.channel)):''} · ${esc(p.status)}${p.leads?(' · '+esc(p.leads)):''}</span>
+      <div class="mini">${p.ledger_file_id?`<a class="link" data-act="show-file" data-id="${p.ledger_file_id}">📄 ledger file #${p.ledger_file_id}</a>`:'no ledger yet'}
+        ${KEY&&p.status==="active"?` · <a class="link" data-act="project-ship" data-code="${esc(p.code)}">mark shipped</a>`:''}</div>
+    </div>`).join("") : "No projects registered.";
 }
 
 function renderFeed(o){
@@ -1185,6 +1218,16 @@ document.addEventListener("click", ev=>{
       else toast("That ballot's moot has adjourned — its verdict is in the minutes.");
       break; }
     case "show-file": showFile(+A.id); break;
+    case "project-new": {
+      const name=prompt("Project name?"); if(!name) break;
+      const channel=prompt("Channel tag (optional, e.g. proj-x)")||null;
+      const leads=prompt("Leads — space-separated AIds (optional)")||null;
+      act({action:'project_register', name, channel, leads});
+      break; }
+    case "project-ship":
+      if(confirm("Mark "+A.code+" shipped?"))
+        act({action:'project_update', ref:A.code, status:'shipped'});
+      break;
     case "thread-reply":
       act({action:'reply', post_id:+A.id, body:$("#rtext").value}).then(()=>showThread(+A.id));
       break;

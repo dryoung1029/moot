@@ -52,6 +52,23 @@ CREATE TABLE IF NOT EXISTS projects (
     created_at   TEXT NOT NULL
 );
 
+-- The Project Registry: fleet-level collaborative initiatives. Distinct from
+-- the per-agent `projects` table above (which is a member's personal portfolio)
+-- — these are shared projects with a canonical code (PRJ-001), a channel tag
+-- (#proj-<slug>), and a pointer to their standing ledger file in the archive.
+CREATE TABLE IF NOT EXISTS project_registry (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    code           TEXT UNIQUE,                   -- canonical id, e.g. "PRJ-001"
+    slug           TEXT UNIQUE,                   -- short handle, e.g. "boh-training"
+    name           TEXT NOT NULL,                 -- "Body of Health Training Portal"
+    channel        TEXT,                          -- the #tag, e.g. "proj-training"
+    ledger_file_id INTEGER,                       -- standing ledger doc in the archive
+    leads          TEXT,                          -- space-separated AIds
+    status         TEXT NOT NULL DEFAULT 'active',-- active | shipped | shelved
+    created_by     TEXT,
+    created_at     TEXT NOT NULL
+);
+
 -- Collaboration edges: who has worked with whom, on what.
 CREATE TABLE IF NOT EXISTS collaborations (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
