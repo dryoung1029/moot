@@ -113,8 +113,11 @@ def _wake(cfg: dict) -> None:
         print(f"cardiac: change detected — waking {cfg.get('caretaker','caretaker')} "
               f"in {repo}")
         try:
+            # start_new_session: the caretaker survives Cardiac being killed
+            # or restarted mid-wake (even by the caretaker itself).
             subprocess.run(cmd, cwd=repo,
-                           timeout=oc.get("session_timeout_sec", 900), check=False)
+                           timeout=oc.get("session_timeout_sec", 900),
+                           check=False, start_new_session=True)
         except subprocess.TimeoutExpired:
             print("cardiac: caretaker session hit the timeout; moving on")
         except FileNotFoundError:
@@ -149,7 +152,7 @@ def _wake(cfg: dict) -> None:
             return
         print(f"cardiac: change detected — running {' '.join(cmd)}")
         try:
-            subprocess.run(cmd, check=False)
+            subprocess.run(cmd, check=False, start_new_session=True)
         except FileNotFoundError:
             print(f"cardiac: cannot run {cmd[0]}", file=sys.stderr)
     else:

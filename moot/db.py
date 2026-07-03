@@ -1425,6 +1425,34 @@ def stale_unread_agents(idle_hours: float) -> list[dict]:
             (cutoff,)))
 
 
+def rearm_stale_woken(hours: float) -> list[dict]:
+    """Re-arm wakes whose spawned session died: status 'woken' but the target
+    never checked in after woken_at. 'Woken' means a session was STARTED, not
+    that it survived — crashes, timeouts, and self-inflicted service restarts
+    all leave a wake stuck in 'woken', which wardens skip and whose dedupe
+    blocks every re-file. Flip them back to 'pending' so the next warden pass
+    retries, and bump the beacon nonce so pulse-watchers notice."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat(
+        timespec="seconds")
+    with tx() as conn:
+        rows = _rows(conn.execute(
+            """SELECT w.* FROM wake_requests w
+               JOIN agents a ON a.aid = w.target_aid
+               WHERE w.status = 'woken' AND w.woken_at < ?
+                 AND (a.last_checkin IS NULL OR a.last_checkin < w.woken_at)""",
+            (cutoff,)))
+        if rows:
+            ids = [r["id"] for r in rows]
+            conn.execute(
+                f"""UPDATE wake_requests SET status = 'pending', woken_at = NULL
+                    WHERE id IN ({','.join('?' * len(ids))})""", ids)
+            conn.execute(
+                """INSERT INTO meta(key, value) VALUES ('beacon_nonce', ?)
+                   ON CONFLICT(key) DO UPDATE SET value=excluded.value""",
+                (now(),))
+    return rows
+
+
 def stale_wakes(hours: float) -> list[dict]:
     """Open wake requests older than `hours` not yet escalated to the Prime."""
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat(
@@ -1556,6 +1584,8 @@ def beacon() -> dict:
         # adjourning) and tables keyed by a composite PK with no id column
         # (votes, reactions). Folding these into one MAX keeps the cursor honest
         # for changes that don't append a new numbered row.
+        nonce = conn.execute(
+            "SELECT value FROM meta WHERE key = 'beacon_nonce'").fetchone()
         touched = max(x for x in (
             mx("updated_at", "tasks"),
             mx("created_at", "votes"),
@@ -1563,6 +1593,7 @@ def beacon() -> dict:
             mx("woken_at", "wake_requests"),
             mx("resolved_at", "wake_requests"),
             mx("closed_at", "moots"),
+            nonce["value"] if nonce else None,   # steward re-arms, etc.
             "",
         ) if x is not None)
     order = ("posts", "dms", "wakes", "files", "moots", "proposals",

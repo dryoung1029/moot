@@ -234,6 +234,20 @@ def wake_unread() -> int:
     return filed
 
 
+def rearm_wakes() -> int:
+    """Retry wakes whose spawned session died before checking in. A 'woken'
+    wake blocks its own retries (wardens skip non-pending; dedupe blocks
+    re-files), so a session that crashes mid-task strands its agent until a
+    human notices. The steward notices instead."""
+    rearmed = db.rearm_stale_woken(config.WAKE_REARM_HOURS)
+    for w in rearmed:
+        actions.fire("Prime", "wake", "Bill", f"wake:{w['id']}",
+                     f"{w['target_aid']}'s wake session appears to have died "
+                     f"(woken, never checked in) — re-armed wake #{w['id']} "
+                     f"for retry")
+    return len(rearmed)
+
+
 def escalate_wakes() -> int:
     """Re-ping the Prime about wake requests nobody has serviced. Once each."""
     stale = db.stale_wakes(config.WAKE_ESCALATE_HOURS)
@@ -250,13 +264,14 @@ def tick() -> dict:
     starves the others."""
     from . import notify
     result = {"nudged": 0, "adjourned": [], "digest": False, "icebreaker": False,
-              "unread_wakes": 0, "wake_escalations": 0, "task_nags": 0,
-              "held_flushed": 0}
+              "unread_wakes": 0, "rearmed_wakes": 0, "wake_escalations": 0,
+              "task_nags": 0, "held_flushed": 0}
     for key, fn in (("nudged", nudge_overdue),
                     ("adjourned", adjourn_stale),
                     ("digest", ensure_digest),
                     ("icebreaker", ensure_icebreaker),
                     ("unread_wakes", wake_unread),
+                    ("rearmed_wakes", rearm_wakes),
                     ("wake_escalations", escalate_wakes),
                     ("task_nags", nag_tasks),
                     ("held_flushed", notify.flush_held_pushes)):

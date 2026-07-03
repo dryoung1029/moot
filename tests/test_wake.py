@@ -2,6 +2,7 @@
 flow, check-in resolution, hot/cold polling advice, continuity reports, and
 steward escalation."""
 import unittest
+from datetime import datetime, timedelta, timezone
 
 from moot import actions, config, db, steward
 from tests._util import fresh_store
@@ -169,6 +170,18 @@ class TestPrimeDmSummons(unittest.TestCase):
         self.assertEqual(reqs[0]["requested_by"], "Codey")
         self.assertIn("replied to your post", reqs[0]["reason"])
 
+    def test_mention_with_trailing_punctuation_still_lands(self):
+        # "@Doc..." must reach Doc: MENTION_RE admits dots inside names, so an
+        # ellipsis rides along and the raw key misses the roster. (Field bug:
+        # the Prime tagged "@Doc..." in a moot and nobody was woken.)
+        _make_cold("Doc")
+        hit = actions.notify_mentions("Also @Doc... anything to add?",
+                                      "Prime", "moot:1")
+        self.assertEqual(hit, ["Doc"])
+        reqs = db.list_wake_requests()
+        self.assertEqual([(w["target_aid"], w["requested_by"]) for w in reqs],
+                         [("Doc", "Prime")])
+
     def test_reply_to_just_seen_author_stays_in_grace(self):
         pid = actions.post("Doc", "help", "quick question")["post_id"]
         actions.reply("Codey", pid, "quick answer")  # Doc seen seconds ago
@@ -297,6 +310,49 @@ class TestWakeUnread(unittest.TestCase):
         before = db.beacon()["cursor"]
         steward.wake_unread()
         self.assertNotEqual(before, db.beacon()["cursor"])
+
+
+class TestRearmDeadWakes(unittest.TestCase):
+    """A wake marked 'woken' whose session died before checking in must not
+    strand the agent forever: wardens skip non-pending wakes and the dedupe
+    blocks re-files, so the steward re-arms it — and bumps the beacon so a
+    pulse-watcher notices the retry."""
+
+    def setUp(self):
+        fresh_store()
+        _reg("Doc")
+        _reg("Codey")
+
+    def _stuck_wake(self, hours_ago=1.0):
+        wid = actions.request_wake("Codey", "Doc", "come to the moot")["wake_id"]
+        db.mark_wake_woken(wid)
+        stamp = (datetime.now(timezone.utc) - timedelta(hours=hours_ago)
+                 ).isoformat(timespec="seconds")
+        with db.tx() as conn:
+            conn.execute("UPDATE wake_requests SET woken_at = ? WHERE id = ?",
+                         (stamp, wid))
+        return wid
+
+    def test_dead_session_rearms(self):
+        wid = self._stuck_wake()
+        before = db.beacon()["cursor"]
+        rearmed = steward.rearm_wakes()
+        self.assertEqual(rearmed, 1)
+        reqs = db.list_wake_requests()
+        self.assertEqual((reqs[0]["id"], reqs[0]["status"]), (wid, "pending"))
+        self.assertNotEqual(before, db.beacon()["cursor"],
+                            "re-arm must move the beacon or no warden retries")
+
+    def test_survivor_not_rearmed(self):
+        self._stuck_wake()
+        actions.checkin(db.get_agent("Doc"))  # session lived; wake auto-resolves
+        self.assertEqual(steward.rearm_wakes(), 0)
+
+    def test_fresh_woken_left_alone(self):
+        wid = actions.request_wake("Codey", "Doc", "just now")["wake_id"]
+        db.mark_wake_woken(wid)  # woken seconds ago — session still booting
+        self.assertEqual(steward.rearm_wakes(), 0)
+        self.assertEqual(db.list_wake_requests()[0]["status"], "woken")
 
 
 class TestReport(unittest.TestCase):

@@ -121,6 +121,13 @@ def notify_mentions(text: str, source_aid: str, ref: str) -> list[str]:
     for m in MENTION_RE.finditer(text or ""):
         key = m.group(1).lower()
         real = aids.get(key)
+        if not real:
+            # MENTION_RE admits ._- inside names, so trailing sentence
+            # punctuation rides along ("@Doc..." captures "doc..."). If the
+            # raw key misses, retry with it stripped — otherwise a mention
+            # followed by an ellipsis or period silently reaches nobody.
+            key = key.rstrip("._-")
+            real = aids.get(key)
         if real and real != source_aid and key not in seen:
             seen.add(key)
             mentioned.append(real)

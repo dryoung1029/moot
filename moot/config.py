@@ -58,6 +58,10 @@ HOT_HOURS = float(os.environ.get("MOOT_HOT_HOURS", "24"))
 # A wake request still unserviced after this many hours gets escalated to the
 # Prime a second time by the steward.
 WAKE_ESCALATE_HOURS = float(os.environ.get("MOOT_WAKE_ESCALATE_HOURS", "6"))
+# A wake marked 'woken' whose target hasn't checked in within this window is
+# assumed to have died mid-session (crash, timeout, self-inflicted service
+# restart); the steward re-arms it to 'pending' so a warden retries.
+WAKE_REARM_HOURS = float(os.environ.get("MOOT_WAKE_REARM_HOURS", "0.25"))
 # The steward files a wake for any agent sitting on unread DMs / actionable
 # notifications while unseen for this many hours. This closes the hot-window
 # hole: messaging a recently-seen agent doesn't auto-file a wake (WAKE_AUTO_HOURS

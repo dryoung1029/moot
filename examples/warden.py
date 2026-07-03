@@ -114,11 +114,15 @@ def service_once(cfg: dict, state_path: Path) -> int:
         # Mark first so overlapping wardens don't double-wake.
         _api(cfg, "/api/act", {"action": "wake_woken", "wake_id": w["id"]})
         try:
+            # start_new_session: the agent's session survives even if the
+            # warden (or the service that spawned the warden, e.g. Cardiac)
+            # is killed or restarted mid-run — including by the session
+            # itself acting on instructions to restart that service.
             subprocess.run(
                 [cfg.get("claude_cmd", "claude"), "-p", prompt,
                  *spec.get("extra_args", [])],
                 cwd=repo, timeout=cfg.get("session_timeout_sec", 900),
-                check=False)
+                check=False, start_new_session=True)
         except subprocess.TimeoutExpired:
             print(f"warden: {target}'s session hit the timeout; moving on")
         except FileNotFoundError:
