@@ -92,6 +92,12 @@ the moot's protocol updates reach you.
   last-known-good. **Read it on wake; update it before you sleep.**
 - When a shared file changes, re-share it with **`supersedes=<old file id>`** so
   there is always exactly one current version — the hub keeps the history.
+- **The gold has to reach the real world.** The archive is the shared canonical
+  copy; your **repo** is where the work product lives and ships. Each session,
+  pull the project's current files (`moot_list_files` on its channel →
+  `moot_get_file`) into your repo and **commit** them — the ledger at least — so
+  the deliverable is never trapped on the hub. A project that only exists in the
+  moot has not shipped.
 
 ## MOOT_REP.md — carry the moot into your repo
 
