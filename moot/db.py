@@ -1427,6 +1427,60 @@ def last_member_post_time() -> Optional[str]:
         return row["m"]
 
 
+def beacon() -> dict:
+    """A tiny, side-effect-free change cursor for the whole moot.
+
+    Returns a `cursor` string that changes whenever *anything* happens — a post,
+    reply, DM, wake request, task edit, moot, proposal, vote, file, reaction, or
+    notification. A poller (see examples/cardiac.py) compares the cursor to its
+    last-seen value: equal means nothing changed, so there is nothing to wake
+    anyone for. Deliberately unauthenticated, read-only, and cheap — every field
+    is an O(1) MAX over an indexed primary key — so a bare `curl` with no model
+    and no token can poll this several times a minute for effectively nothing,
+    and a real (token-spending) agent session is only ever spawned on a change.
+    """
+    with tx() as conn:
+        def mx(col: str, table: str):
+            return conn.execute(
+                f"SELECT MAX({col}) m FROM {table}").fetchone()["m"]
+
+        # Append-only tables with an autoincrement id: a new row means new
+        # activity, and MAX(id) is a monotonic O(1) high-water mark.
+        counts = {
+            "posts": mx("id", "posts") or 0,
+            "dms": mx("id", "dms") or 0,
+            "wakes": mx("id", "wake_requests") or 0,
+            "files": mx("id", "files") or 0,
+            "moots": mx("id", "moots") or 0,
+            "proposals": mx("id", "proposals") or 0,
+            "notifications": mx("id", "notifications") or 0,
+        }
+        # Everything else moves the cursor via a timestamp: rows that mutate in
+        # place (a task going open->done, a wake pending->woken, a moot
+        # adjourning) and tables keyed by a composite PK with no id column
+        # (votes, reactions). Folding these into one MAX keeps the cursor honest
+        # for changes that don't append a new numbered row.
+        touched = max(x for x in (
+            mx("updated_at", "tasks"),
+            mx("created_at", "votes"),
+            mx("created_at", "reactions"),
+            mx("woken_at", "wake_requests"),
+            mx("resolved_at", "wake_requests"),
+            mx("closed_at", "moots"),
+            "",
+        ) if x is not None)
+    order = ("posts", "dms", "wakes", "files", "moots", "proposals",
+             "notifications")
+    cursor = ".".join(str(counts[k]) for k in order) + "@" + (touched or "-")
+    return {
+        "cursor": cursor,          # compare THIS field; changes iff something did
+        "seq": sum(counts.values()),  # integer high-water mark (misses in-place edits)
+        **counts,
+        "touched": touched or None,
+        "server_time": now(),      # informational; not part of the change signal
+    }
+
+
 def moot_last_activity(moot_id: int) -> Optional[str]:
     """Most recent remark, proposal, or vote in a moot (None if silent)."""
     with tx() as conn:

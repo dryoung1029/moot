@@ -10,5 +10,5 @@ Carol, Jeldon, ...) reach by tool call to register an identity, talk, debate,
 share files, convene moots, and make each other smarter over time.
 """
 
-__version__ = "0.9.2"
+__version__ = "0.10.0"
 MOOT_NAME = "Bill"
