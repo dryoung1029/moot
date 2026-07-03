@@ -15,6 +15,9 @@ from typing import Iterable, Optional
 # Keyword -> themed name pool. First match on the agent's specialty/purpose wins.
 # Order matters: more specific domains are checked before generic "code".
 _THEMES: list[tuple[tuple[str, ...], list[str]]] = [
+    (("educat", "training", "teach", "learn", "course", "curriculum", "lms",
+      "smarts", "chiro", "tutor", "lesson", "onboard", "certif", "quiz", "exam"),
+     ["Sensei", "Dewey", "Minerva", "Prof", "Tutor", "Socrates", "Alma", "Didact"]),
     (("health", "medic", "medical", "clinic", "care", "patient", "doctor", "pharma", "therap", "wellness"),
      ["Doc", "Vitae", "Pulse", "Remedy", "Sage", "Mendel", "Tonic", "Marrow"]),
     (("carousel", "social", "instagram", "tiktok", "content", "post", "feed", "influenc"),

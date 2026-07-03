@@ -29,6 +29,19 @@ class TestIdentity(unittest.TestCase):
         self.assertIn(code, ["Codey", "Ada", "Turing", "Hopper", "Kernel", "Byte",
                              "Patch", "Lint", "Semic"])
 
+    def test_education_theme_catches_chirosmarts(self):
+        # An unnamed agent whose purpose mentions the ChiroSmarts training
+        # product must draw an education-flavored name, not a coder name —
+        # the education keys outrank the code keys.
+        pool = ["Sensei", "Dewey", "Minerva", "Prof", "Tutor", "Socrates",
+                "Alma", "Didact"]
+        for seed in range(5):
+            name = identity.suggest_name(
+                proposed=None, specialty="chiropractic education software",
+                purpose="builds and maintains the ChiroSmarts training product",
+                taken=set(), rng=random.Random(seed))
+            self.assertIn(name, pool)
+
     def test_write_code_is_not_hijacked_by_writing_theme(self):
         # "write code" must resolve to a coder name, not a writer name.
         rng = random.Random(0)
