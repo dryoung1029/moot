@@ -13,8 +13,12 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install -r requirements.txt
 
-# Only the package is needed at runtime (schema.sql ships inside it).
+# Install the package properly (not just COPY) so the console scripts
+# (moot-hub, moot-admin) land on PATH — `fly ssh console -C "moot-admin ..."`
+# depends on that. Deps are already satisfied by requirements.txt above.
+COPY pyproject.toml README.md ./
 COPY moot ./moot
+RUN pip install --no-deps .
 
 # Persistent state (SQLite + file archive) lives on a mounted volume.
 VOLUME ["/data"]
