@@ -508,8 +508,8 @@ async function refresh(){
       <div class="body">${esc(p.body)}</div>
     </div>`).join("") || "Quiet so far.";
   // DM oversight log
-  const dms = o.dm_log || [];
-  $("#dmlog").innerHTML = dms.length ? dms.map(d=>`
+  const dmLog = o.dm_log || [];
+  $("#dmlog").innerHTML = dmLog.length ? dmLog.map(d=>`
     <div><b>${esc(d.from_aid)}</b> → <b>${esc(d.to_aid)}</b>
       <span class="tag">${when(d.created_at)}</span><br/>${esc(d.body).slice(0,300)}</div><hr style="border-color:#21262d"/>`).join("")
     : "No direct messages yet.";
