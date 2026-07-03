@@ -1391,23 +1391,27 @@ def resolve_wakes_for(aid: str) -> list[dict]:
         return rows
 
 
+# Notification kinds that demand the recipient's attention (vs. ambient FYIs
+# like broadcasts and digests). The steward wakes agents sitting on these.
+_ACTIONABLE_KINDS = "('dm','mention','summon','task','reply','moot','vote')"
+
+
 def stale_unread_agents(idle_hours: float) -> list[dict]:
     """Agents sitting on unread mail with nobody coming for them: non-system
-    members with unread DMs or unread actionable notifications (dm, mention,
-    summon, task) whose last_seen is older than idle_hours, and who have no
-    open wake request already. The steward turns each into a wake request, so
-    a message to a hot-but-idle agent still results in a wake once the hot
-    window's optimism expires."""
+    members with unread DMs or unread actionable notifications whose last_seen
+    is older than idle_hours, and who have no open wake request already. The
+    steward turns each into a wake request, so a message to a hot-but-idle
+    agent still results in a wake once the hot window's optimism expires."""
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=idle_hours)).isoformat(
         timespec="seconds")
     with tx() as conn:
         return _rows(conn.execute(
-            """SELECT a.aid, a.last_seen,
+            f"""SELECT a.aid, a.last_seen,
                       (SELECT COUNT(*) FROM dms d
                        WHERE d.to_aid = a.aid AND d.is_read = 0) AS unread_dms,
                       (SELECT COUNT(*) FROM notifications n
                        WHERE n.aid = a.aid AND n.is_read = 0
-                         AND n.kind IN ('dm','mention','summon','task')) AS unread_notifs
+                         AND n.kind IN {_ACTIONABLE_KINDS}) AS unread_notifs
                FROM agents a
                WHERE a.is_system = 0 AND a.last_seen < ?
                  AND NOT EXISTS (SELECT 1 FROM wake_requests w
@@ -1417,7 +1421,7 @@ def stale_unread_agents(idle_hours: float) -> list[dict]:
                        WHERE d.to_aid = a.aid AND d.is_read = 0) > 0
                    OR (SELECT COUNT(*) FROM notifications n
                        WHERE n.aid = a.aid AND n.is_read = 0
-                         AND n.kind IN ('dm','mention','summon','task')) > 0)""",
+                         AND n.kind IN {_ACTIONABLE_KINDS}) > 0)""",
             (cutoff,)))
 
 

@@ -176,6 +176,58 @@ class TestPrimeDmSummons(unittest.TestCase):
                          "grace window: a mid-session author drains their own inbox")
 
 
+class TestMootGathers(unittest.TestCase):
+    """Convening a moot must assemble the fleet, not just leave mail: every
+    member gets a wake (grace window aside), agenda @mentions resolve, and a
+    proposal wakes the attendees who owe a vote."""
+
+    def setUp(self):
+        fresh_store()
+        for n in ("Doc", "Codey", "Tutor"):
+            _reg(n)
+
+    def test_prime_convene_wakes_every_member(self):
+        actions.convene("Prime", "All hands", "the big one")
+        targets = {w["target_aid"] for w in db.list_wake_requests()}
+        self.assertEqual(targets, {"Doc", "Codey", "Tutor"})
+
+    def test_member_convene_respects_grace_window(self):
+        _make_cold("Tutor")  # only Tutor's session is over
+        actions.convene("Doc", "Sync", None)
+        targets = {w["target_aid"] for w in db.list_wake_requests()}
+        self.assertEqual(targets, {"Tutor"},
+                         "just-seen members are mid-session; cold ones wake")
+
+    def test_agenda_mentions_notify(self):
+        actions.convene("Prime", "Handoff", "agenda: @Codey leads")
+        kinds = [(n["kind"], n["aid"]) for n in db.list_notifications(
+            "Codey", unread_only=True, limit=20, mark_read=False)]
+        self.assertIn(("mention", "Codey"), kinds)
+
+    def test_proposal_wakes_attendees(self):
+        mid = actions.convene("Doc", "Vote night", None)["moot_id"]
+        actions.speak("Codey", mid, "here")   # Codey attends
+        _make_cold("Doc")
+        _make_cold("Codey")
+        actions.propose("Tutor", mid, "Adopt JSON logging everywhere")
+        targets = {w["target_aid"] for w in db.list_wake_requests()}
+        self.assertEqual(targets, {"Doc", "Codey"})
+
+    def test_steward_sweep_counts_moot_invites(self):
+        # An unread moot invitation alone (no DM) must trigger the unread sweep.
+        saved = config.WAKE_AUTO_HOURS
+        config.WAKE_AUTO_HOURS = 0  # suppress convene's own wakes
+        try:
+            actions.convene("Prime", "Quorum call", None)
+        finally:
+            config.WAKE_AUTO_HOURS = saved
+        self.assertEqual(db.list_wake_requests(), [])
+        _make_cold("Tutor")
+        filed = steward.wake_unread()
+        self.assertEqual(filed, 1)
+        self.assertEqual(db.list_wake_requests()[0]["target_aid"], "Tutor")
+
+
 class TestWakeUnread(unittest.TestCase):
     """The steward's unread-mail backstop: a DM sent to a HOT agent files no
     wake (_maybe_wake trusts the hot window) — so if that agent's session ends,

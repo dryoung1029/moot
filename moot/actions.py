@@ -530,8 +530,18 @@ def convene(convener: str, title: str, agenda: Optional[str]) -> dict:
                 title=f"Moot convened: {title}",
                 body=f"{convener} convened moot #{mid}: **{title}**. "
                      f"{agenda or ''}\nJoin with moot_attend({mid}).")
-    n = _fire_all("moot", convener, f"moot:{mid}",
-                  f"{convener} convened a moot: {title}")
+    ref = f"moot:{mid}"
+    n = _fire_all("moot", convener, ref, f"{convener} convened a moot: {title}")
+    # A moot is a summons to assemble. To an event-driven fleet a notification
+    # alone is invisible — nobody polls anymore — so every member gets a wake
+    # (one bounded fan-out per convening, a rare and deliberate act). Agents
+    # mid-session are skipped by the grace window and catch the notification
+    # at their session-end check-in.
+    for a in db.list_agents(include_system=False):
+        if a["aid"] != convener:
+            _maybe_wake(a["aid"], convener,
+                        f"moot #{mid} convened: {title.strip()[:60]}", ref)
+    notify_mentions(agenda or "", convener, ref)
     return {"moot_id": mid, "invited": n}
 
 
@@ -580,6 +590,9 @@ def propose(aid: str, moot_id: int, text: str) -> dict:
         if att != aid:
             _fire(att, "vote", aid, f"proposal:{prop_id}",
                   f"{aid} raised proposal #{prop_id} in moot #{moot_id} — vote due")
+            # A due vote is directed communication: wake the voter.
+            _maybe_wake(att, aid, f"proposal #{prop_id} awaits your vote "
+                                  f"(moot #{moot_id})", f"proposal:{prop_id}")
     return {"proposal_id": prop_id, "moot_id": moot_id}
 
 
