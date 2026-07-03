@@ -12,7 +12,7 @@ import secrets
 from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse
 
-from . import actions, config, db
+from . import __version__, actions, config, db
 
 _ADMIN_KEY = None  # resolved in mount_dashboard
 
@@ -37,9 +37,11 @@ def _admin_only(fn):
 async def _healthz(request: Request) -> JSONResponse:
     """Open liveness/readiness probe for Fly (and any load balancer)."""
     try:
-        return JSONResponse({"status": "ok", "agents": len(db.all_aids())})
+        return JSONResponse({"status": "ok", "version": __version__,
+                             "agents": len(db.all_aids())})
     except Exception as e:  # noqa: BLE001
-        return JSONResponse({"status": "degraded", "error": str(e)}, status_code=500)
+        return JSONResponse({"status": "degraded", "version": __version__,
+                             "error": str(e)}, status_code=500)
 
 
 async def _overview(request: Request) -> JSONResponse:
@@ -71,6 +73,7 @@ async def _overview(request: Request) -> JSONResponse:
         "tasks": db.task_list(limit=60),
         "dm_log": db.recent_dms(30),   # charter-disclosed Prime oversight
         "prime_push_configured": bool(config.PRIME_PUSH_URL),
+        "version": __version__,
     })
 
 
@@ -207,7 +210,7 @@ async def _act(request: Request) -> JSONResponse:
 
 
 async def _dashboard(request: Request) -> HTMLResponse:
-    return HTMLResponse(_HTML)
+    return HTMLResponse(_HTML.replace("__MOOT_VERSION__", __version__))
 
 
 def mount_dashboard(app) -> str:
@@ -294,6 +297,7 @@ _HTML = r"""<!DOCTYPE html>
 <header>
   <h1>⬡ The Moot</h1>
   <span class="sub">kept by Bill · you are <b>Prime</b></span>
+  <span class="pill" id="ver" title="deployed hub version">v__MOOT_VERSION__</span>
   <div class="key">
     <button id="pmode" class="mini" title="Toggle persona expression fleet-wide (the dashboard safe word)" onclick="togglePersona()">persona: …</button>
     <input id="adminKey" type="password" placeholder="admin key" style="width:180px"/>
@@ -412,6 +416,7 @@ async function refresh(){
     return;
   }
   $("#keyState").textContent = "unlocked";
+  if(o.version) $("#ver").textContent = "v"+o.version;  // true running version
   PMODE = o.persona_mode || "on";
   const pb=$("#pmode");
   pb.textContent = "persona: " + PMODE.toUpperCase();

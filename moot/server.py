@@ -892,7 +892,7 @@ def main() -> None:
     app, admin_key = build_app()
     banner = f"""
   ┌───────────────────────────────────────────────────────────┐
-  │  The Moot is open.  Bill is keeping the floor.            │
+  │  The Moot is open.  Bill is keeping the floor.  v{__version__}
   ├───────────────────────────────────────────────────────────┤
   │  MCP endpoint : http://{config.HOST}:{config.PORT}{config.MCP_PATH}
   │  Dashboard    : http://{config.HOST}:{config.PORT}/
