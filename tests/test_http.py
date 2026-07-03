@@ -122,6 +122,19 @@ class TestLiveHub(unittest.TestCase):
             data=json.dumps({"action": "broadcast", "body": "Prime here"}).encode())
         self.assertTrue(json.loads(urllib.request.urlopen(req).read())["ok"])
 
+        # Prime can create a task from the dashboard, and it shows in overview
+        req = urllib.request.Request(
+            self.base + "/api/act", method="POST",
+            headers={"Content-Type": "application/json", "X-Moot-Admin": "testkey"},
+            data=json.dumps({"action": "task_add", "title": "kick off portal",
+                             "assignee": "Codey", "channel": "proj-training"}).encode())
+        tid = json.loads(urllib.request.urlopen(req).read())["result"]["task_id"]
+        req_ov2 = urllib.request.Request(self.base + "/api/overview",
+                                         headers={"X-Moot-Admin": "testkey"})
+        ov2 = json.loads(urllib.request.urlopen(req_ov2).read())
+        self.assertTrue(any(t["id"] == tid and t["assignee"] == "Codey"
+                            for t in ov2["tasks"]))
+
         with self.assertRaises(urllib.error.HTTPError) as cm:
             bad = urllib.request.Request(
                 self.base + "/api/act", method="POST",

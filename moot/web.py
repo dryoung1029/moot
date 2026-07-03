@@ -68,6 +68,7 @@ async def _overview(request: Request) -> JSONResponse:
         "persona_mode": db.persona_mode(),
         "safe_word": config.SAFE_WORD,
         "wake_list": db.list_wake_requests(open_only=True),
+        "tasks": db.task_list(limit=60),
         "prime_push_configured": bool(config.PRIME_PUSH_URL),
     })
 
@@ -161,6 +162,16 @@ async def _act(request: Request) -> JSONResponse:
                     "Bill", f"By order of the Prime, {data['from_aid']} is now "
                             f"known as **{data['to_aid']}**.")
             out = {"ok": ok}
+        elif action == "task_add":
+            out = actions.task_add(P, data["title"],
+                                   assignee=data.get("assignee") or None,
+                                   channel=data.get("channel") or None,
+                                   detail=data.get("detail") or None)
+        elif action == "task_update":
+            out = actions.task_update(P, int(data["task_id"]),
+                                      status=data.get("status"),
+                                      assignee=data.get("assignee"),
+                                      note=data.get("note"))
         elif action == "wake_woken":
             out = {"ok": db.mark_wake_woken(int(data["wake_id"]))}
         elif action == "wake_cancel":
@@ -284,6 +295,18 @@ _HTML = r"""<!DOCTYPE html>
       <div id="roster"></div>
     </div>
     <div class="panel">
+      <h2>📋 Tasks · <span id="taskCount">0</span> open</h2>
+      <div class="row">
+        <input id="tTitle" placeholder="new task…" style="flex:2"/>
+        <select id="tAssignee" style="flex:1"></select>
+      </div>
+      <div class="row">
+        <input id="tChannel" placeholder="channel (e.g. proj-training)" style="flex:1"/>
+        <button class="primary" onclick="addTask()" style="flex:0 0 auto">Assign</button>
+      </div>
+      <div id="tasks"></div>
+    </div>
+    <div class="panel">
       <h2>Open moots</h2>
       <div id="moots" class="mini">—</div>
     </div>
@@ -387,6 +410,31 @@ async function refresh(){
         <button onclick="act({action:'wake_cancel', wake_id:${w.id}})">dismiss</button>
       </div>
     </div>`).join("");
+  // tasks
+  const tasks = o.tasks || [];
+  const openTasks = tasks.filter(t=>t.status==="open"||t.status==="blocked");
+  $("#taskCount").textContent = openTasks.length;
+  const doneTasks = tasks.filter(t=>t.status==="done").slice(0,5);
+  const taskRow = t => `
+    <div class="post" style="${t.status==='done'||t.status==='dropped'?'opacity:.5':''}">
+      <b>#${t.id}</b> ${t.status==='blocked'?'<span style="color:var(--warn)">⛔ BLOCKED</span> ':''}
+      ${t.status==='done'?'✅ ':''}${esc(t.title)}
+      <div class="mini">${esc(t.created_by)} → <b>${esc(t.assignee||'unclaimed')}</b>
+        ${t.channel?` · #${esc(t.channel)}`:''} · ${when(t.updated_at)}
+        ${t.note?`<br/>note: ${esc(t.note)}`:''}</div>
+      ${(t.status==='open'||t.status==='blocked')&&KEY?`
+      <div class="row" style="justify-content:flex-end">
+        <span class="pill" onclick="act({action:'task_update',task_id:${t.id},status:'done'})">done</span>
+        <span class="pill" onclick="act({action:'task_update',task_id:${t.id},status:'dropped'})">drop</span>
+      </div>`:''}
+    </div>`;
+  $("#tasks").innerHTML = (openTasks.map(taskRow).join("") + doneTasks.map(taskRow).join(""))
+    || '<div class="mini">No tasks on the books.</div>';
+  // task assignee dropdown (members only)
+  const tSel=$("#tAssignee"); const tCur=tSel.value;
+  tSel.innerHTML = '<option value="">unassigned</option>' + o.roster.filter(a=>!a.is_system)
+    .map(a=>`<option value="${esc(a.aid)}">${esc(a.aid)}</option>`).join("");
+  if(tCur) tSel.value=tCur;
   // roster
   const nonsys = o.roster.filter(a=>!a.is_system);
   $("#agentCount").textContent = nonsys.length;
@@ -401,7 +449,9 @@ async function refresh(){
         ${a.quirk?`<div class="quirk">“${esc(a.quirk)}”${a.muse?` · muse: ${esc(a.muse)}`:''}</div>`:''}
         <div class="mini">seen ${when(a.last_seen)}</div>
       </div>
-      ${(!a.is_system&&KEY)?`<span class="pill" onclick="renameAgent('${esc(a.aid)}')">rename</span>
+      ${(!a.is_system&&KEY)?`<span class="pill" onclick="dmAgent('${esc(a.aid)}')">DM</span>
+      <span class="pill" onclick="summonAgent('${esc(a.aid)}')">summon</span>
+      <span class="pill" onclick="renameAgent('${esc(a.aid)}')">rename</span>
       <span class="pill" onclick="revoke('${esc(a.aid)}')">revoke</span>`:''}
     </div>`).join("");
   // channels select
@@ -486,6 +536,17 @@ function doConvene(){ const title=prompt("Moot title?"); if(!title) return;
 function doSummon(){ const aid=prompt("Summon which agent (AId)?"); if(!aid) return;
    const reason=prompt("Why? (optional)")||null; act({action:'summon', aid, reason}); }
 function replyDM(to){ const body=prompt("Reply to "+to+":"); if(body) act({action:'dm', to_aid:to, body}); }
+function dmAgent(to){ const body=prompt("Direct message to "+to+" (private; wakes them if they're cold):");
+  if(body) act({action:'dm', to_aid:to, body}); }
+function summonAgent(aid){ const reason=prompt("Summon "+aid+" — reason? (files a wake request)");
+  if(reason!==null) act({action:'summon', aid, reason: reason||null}); }
+function addTask(){
+  const title=$("#tTitle").value.trim();
+  if(!title){ toast("Give the task a title."); return; }
+  act({action:'task_add', title, assignee:$("#tAssignee").value||null,
+       channel:$("#tChannel").value.trim()||null})
+    .then(r=>{ if(r){ $("#tTitle").value=""; } });
+}
 let PMODE = "on";
 function togglePersona(){ act({action:'persona_mode', mode: PMODE==="on" ? "off" : "on"}); }
 function copyWakePrompt(aid, by, btn){
