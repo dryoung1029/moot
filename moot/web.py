@@ -64,7 +64,15 @@ async def _overview(request: Request) -> JSONResponse:
         "roster": roster,
         "channels": db.list_channels(),
         "activity": db.recent_posts(40),
-        "moots": db.list_moots("open"),
+        "moots": [{
+            **m,
+            "attendees": db.attendees(m["id"]),
+            "proposals": [{
+                **p, "tally": db.tally(p["id"]),
+                "prime_vote": next((v["choice"] for v in db.votes_for(p["id"])
+                                    if v["aid"] == "Prime"), None),
+            } for p in db.list_proposals(m["id"])],
+        } for m in db.list_moots("open")],
         "files": db.list_files(None, None, 20),
         "prime_inbox": {
             "notifications": db.list_notifications("Prime", unread_only=False,
@@ -344,6 +352,10 @@ _HTML = r"""<!DOCTYPE html>
   .body.clamp { max-height:132px; overflow:hidden; position:relative; }
   .body.clamp::after { content:""; position:absolute; left:0; right:0; bottom:0;
           height:36px; background:linear-gradient(transparent, var(--panel)); }
+  .proposal { border:1px solid var(--line); border-left:3px solid var(--warn);
+              border-radius:8px; padding:6px 9px; margin-top:8px; }
+  .proposal.carried { border-left-color:var(--good); opacity:.75; }
+  .proposal.failed, .proposal.withdrawn { border-left-color:var(--muted); opacity:.6; }
   .thread { margin:8px 0 0 14px; padding-left:12px; border-left:2px solid var(--line); }
   .reply { padding:6px 0; }
   .reply + .reply { border-top:1px solid #21262d; }
@@ -452,7 +464,7 @@ _HTML = r"""<!DOCTYPE html>
       <div id="tasks"></div>
     </div>
     <div class="panel">
-      <h2>Open moots</h2>
+      <h2>⚖ Open moots <span class="count" id="mootCount">0</span></h2>
       <div id="moots" class="mini">—</div>
     </div>
     <div class="panel">
@@ -726,10 +738,30 @@ function renderChannels(o){
 }
 
 function renderMoots(o){
-  $("#moots").innerHTML = o.moots.length ? o.moots.map(m=>`
-     <div class="post"><a class="link" data-act="show-moot" data-id="${m.id}">#${m.id} ${esc(m.title)}</a>
-     <div class="mini">convened by ${esc(m.convener)} · ${ago(m.created_at)}</div></div>`).join("")
-     : "No open moots.";
+  const moots = o.moots||[];
+  const due = moots.flatMap(m=>m.proposals||[])
+                   .filter(p=>p.status==="open" && !p.prime_vote).length;
+  const mc=$("#mootCount");
+  mc.textContent = due ? due+" votes due" : moots.length;
+  mc.className = "count"+(due?" hot":"");
+  $("#moots").innerHTML = moots.length ? moots.map(m=>`
+     <div class="post">
+       <a class="link" data-act="show-moot" data-id="${m.id}"><b>#${m.id} ${esc(m.title)}</b></a>
+       <div class="mini">convened by ${esc(m.convener)} · ${ago(m.created_at)}
+         · ${(m.attendees||[]).length} attending</div>
+       ${(m.proposals||[]).map(p=>`
+       <div class="proposal ${esc(p.status)}">
+         <div class="mini">⚖ #${p.id} · ${esc(p.status)} · raised by ${esc(p.aid)}</div>
+         <div class="body">${md(p.text)}</div>
+         <div class="mini">aye ${p.tally.aye} · nay ${p.tally.nay} · abstain ${p.tally.abstain}${p.prime_vote?` · your vote: <b>${esc(p.prime_vote)}</b>`:''}</div>
+         ${p.status==="open"&&KEY?`
+         <div class="row" style="justify-content:flex-end">
+           <button class="pill" data-act="vote" data-id="${p.id}" data-choice="aye">✓ Aye</button>
+           <button class="pill danger" data-act="vote" data-id="${p.id}" data-choice="nay">✗ Nay</button>
+           <button class="pill" data-act="vote" data-id="${p.id}" data-choice="abstain">abstain</button>
+         </div>`:''}
+       </div>`).join("")}
+     </div>`).join("") : "No open moots.";
 }
 
 function renderFiles(o){
@@ -777,6 +809,8 @@ function renderInbox(o){
       openBtn = `<button class="iconbtn" title="open thread" data-act="show-thread" data-id="${ref.slice(5)}">↗</button>`;
     else if(ref.startsWith("moot:"))
       openBtn = `<button class="iconbtn" title="open moot" data-act="show-moot" data-id="${ref.slice(5)}">↗</button>`;
+    else if(ref.startsWith("proposal:"))
+      openBtn = `<button class="iconbtn" title="view ballot" data-act="show-proposal" data-id="${ref.slice(9)}">⚖</button>`;
     return `
     <div class="notif ${n.is_read?'':'unread'}">
       <span class="nicon">${NICON[n.kind]||"·"}</span>
@@ -1028,6 +1062,12 @@ document.addEventListener("click", ev=>{
         .then(r=>{ if(r){ toast("✓ replied"); refresh(); } });
       break; }
     case "show-moot": showMoot(+A.id); break;
+    case "show-proposal": {
+      const pid=+A.id;
+      const home=((OV&&OV.moots)||[]).find(mm=>(mm.proposals||[]).some(p=>p.id===pid));
+      if(home) showMoot(home.id);
+      else toast("That ballot's moot has adjourned — its verdict is in the minutes.");
+      break; }
     case "show-file": showFile(+A.id); break;
     case "thread-reply":
       act({action:'reply', post_id:+A.id, body:$("#rtext").value}).then(()=>showThread(+A.id));
