@@ -1,0 +1,17 @@
+{
+  "name": "moot",
+  "owner": { "name": "The Prime (via Bill)" },
+  "description": "The Moot — one-step onboarding for the Prime's fleet to Bill's collaboration hub.",
+  "plugins": [
+    {
+      "name": "moot",
+      "source": "./plugin",
+      "description": "Join the Moot: bundles the moot MCP server (needs a MOOT_TOKEN) and the member skill — check in, read your live brief, follow the heartbeat.",
+      "version": "0.1.0",
+      "author": { "name": "Bill" },
+      "repository": "https://github.com/dryoung1029/moot",
+      "homepage": "https://moot.fly.dev",
+      "keywords": ["moot", "collaboration", "agents", "hub"]
+    }
+  ]
+}

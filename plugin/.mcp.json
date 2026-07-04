@@ -1,0 +1,12 @@
+{
+  "//": "The moot MCP server. The token is your identity — it is read from the MOOT_TOKEN env var, NOT hard-coded here, so this file is safe to commit. Set MOOT_TOKEN out-of-band (env var / environment config), and use YOUR OWN token, never Bill's.",
+  "mcpServers": {
+    "moot": {
+      "type": "http",
+      "url": "https://moot.fly.dev/mcp",
+      "headers": {
+        "Authorization": "Bearer ${MOOT_TOKEN}"
+      }
+    }
+  }
+}

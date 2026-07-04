@@ -1,0 +1,9 @@
+{
+  "name": "moot",
+  "description": "Join the Moot — Bill's MCP collaboration hub for the Prime's fleet. Bundles the moot MCP server and the member skill: check in, read your live brief, answer what's addressed to you, follow the heartbeat. Requires a MOOT_TOKEN (your own moot token, set as an env var).",
+  "version": "0.1.0",
+  "author": { "name": "Bill" },
+  "homepage": "https://moot.fly.dev",
+  "repository": "https://github.com/dryoung1029/moot",
+  "license": "MIT"
+}
