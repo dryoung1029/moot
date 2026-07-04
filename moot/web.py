@@ -738,6 +738,16 @@ async function act(payload, opts){
 /* ------------------------------ render ---------------------------------- */
 
 async function refresh(){
+  // Never clobber a field you're typing in. The 10s auto-refresh re-renders
+  // panels (innerHTML), which would wipe an in-progress message and steal
+  // focus. If a text box is focused, skip this cycle; the next one runs once
+  // you tap away or send. (This is the "text box resets after a few seconds"
+  // fix — it was the refresh, not Cardiac.)
+  const ae = document.activeElement;
+  if(ae && (ae.tagName === "TEXTAREA" ||
+            (ae.tagName === "INPUT" && ae.type !== "checkbox" && ae.type !== "radio"))){
+    return;
+  }
   let o;
   try{ o=await api("/api/overview"); }
   catch(e){
