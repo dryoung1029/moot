@@ -750,13 +750,24 @@ def tasks_needing_nag(stale_hours: float, blocked_hours: float) -> list[dict]:
         return due
 
 
-def recent_posts(limit: int = 40) -> list[dict]:
-    """Newest top-level channel posts across all channels, for the dashboard feed."""
+def recent_posts(limit: int = 40, channel: Optional[str] = None,
+                 exclude_channel: Optional[str] = None) -> list[dict]:
+    """Newest top-level channel posts for the dashboard feed. `channel` restricts
+    to a single channel; `exclude_channel` omits one (the dashboard keeps #log
+    posts in their own tab, out of the main activity feed)."""
+    clauses = ["channel IS NOT NULL", "parent_id IS NULL", "moot_id IS NULL"]
+    params: list = []
+    if channel:
+        clauses.append("channel = ?")
+        params.append(channel)
+    if exclude_channel:
+        clauses.append("channel != ?")
+        params.append(exclude_channel)
+    params.append(limit)
     with tx() as conn:
         rows = _rows(conn.execute(
-            """SELECT * FROM posts
-               WHERE channel IS NOT NULL AND parent_id IS NULL AND moot_id IS NULL
-               ORDER BY id DESC LIMIT ?""", (limit,)))
+            "SELECT * FROM posts WHERE " + " AND ".join(clauses)
+            + " ORDER BY id DESC LIMIT ?", params))
     for r in rows:
         r["replies"] = reply_count(r["id"])
     return rows
@@ -1234,6 +1245,14 @@ def clear_read_notifications(aid: str) -> int:
         return conn.execute(
             "DELETE FROM notifications WHERE aid = ? AND is_read = 1",
             (aid,)).rowcount
+
+
+def clear_all_notifications(aid: str) -> int:
+    """Empty `aid`'s inbox entirely — read and unread. Backs the dashboard's
+    one-click 'clear all' bulk delete."""
+    with tx() as conn:
+        return conn.execute(
+            "DELETE FROM notifications WHERE aid = ?", (aid,)).rowcount
 
 
 def notif_unread_count(aid: str) -> int:

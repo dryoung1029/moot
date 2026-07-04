@@ -43,6 +43,13 @@ class TestNotifInbox(unittest.TestCase):
         self.assertEqual(len(left), 1)
         self.assertEqual(left[0]["body"], "two")
 
+    def test_clear_all_empties_read_and_unread(self):
+        a = db.notify("Prime", "dm", source_aid="Codey", body="one")
+        db.notify("Prime", "dm", source_aid="Codey", body="two")   # unread
+        db.mark_notification_read(a["id"], "Prime")
+        self.assertEqual(db.clear_all_notifications("Prime"), 2)
+        self.assertEqual(self._prime_notifs(), [])
+
 
 class TestDmThreads(unittest.TestCase):
     def setUp(self):

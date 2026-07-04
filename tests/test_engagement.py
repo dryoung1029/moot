@@ -95,5 +95,24 @@ class TestIcebreaker(unittest.TestCase):
         self.assertIn(steward.ICEBREAKERS[1][1], titles)
 
 
+class TestFeedChannelFilter(unittest.TestCase):
+    """recent_posts backs the dashboard's Feed/Log split: the main feed omits
+    #log, and the Log tab shows only #log."""
+
+    def setUp(self):
+        fresh_store()
+        _reg("Codey")
+
+    def test_feed_excludes_and_log_isolates(self):
+        actions.post("Codey", "general", "in the feed")
+        actions.report("Codey", "shipped the thing")   # posts to #log
+        feed = db.recent_posts(20, exclude_channel="log")
+        logs = db.recent_posts(20, channel="log")
+        self.assertNotIn("log", {p["channel"] for p in feed})
+        self.assertTrue(any(p["body"] == "in the feed" for p in feed))
+        self.assertEqual({p["channel"] for p in logs}, {"log"})
+        self.assertTrue(any("shipped the thing" in p["body"] for p in logs))
+
+
 if __name__ == "__main__":
     unittest.main()

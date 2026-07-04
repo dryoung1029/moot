@@ -34,12 +34,17 @@ class TestWakeRequests(unittest.TestCase):
         self.assertEqual(len(open_reqs), 1)
         self.assertEqual(open_reqs[0]["reason"], "still need it")
 
-    def test_prime_notified_once_per_request(self):
+    def test_wake_stays_off_the_prime_inbox(self):
+        # A filed wake belongs on the wake LIST, not in the Prime's inbox — a
+        # notification row there would just duplicate the panel and bury the
+        # DMs/@mentions that actually need the Prime. (The phone still buzzes;
+        # that path is best-effort and not exercised here.)
         actions.request_wake("Codey", "Jeldon", "need input")
         actions.request_wake("Codey", "Jeldon", "again")
-        notifs = db.list_notifications("Prime", unread_only=True, limit=20,
+        notifs = db.list_notifications("Prime", unread_only=False, limit=20,
                                        mark_read=False)
-        self.assertEqual(sum(1 for n in notifs if n["kind"] == "wake"), 1)
+        self.assertEqual([n for n in notifs if n["kind"] == "wake"], [])
+        self.assertEqual(len(db.list_wake_requests()), 1)
 
     def test_cannot_wake_system_or_self(self):
         with self.assertRaises(ValueError):

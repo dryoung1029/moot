@@ -151,10 +151,14 @@ def request_wake(requested_by: str, target_aid: str, reason: Optional[str],
         raise ValueError("you're already awake")
     wid, created = db.add_wake_request(target_aid, requested_by, reason, ref)
     if created:
-        # The Prime's notification doubles as the phone push (see _fire).
-        _fire("Prime", "wake", requested_by, f"wake:{wid}",
-              f"Wake list: {requested_by} needs {target_aid}"
-              + (f" — {reason}" if reason else ""))
+        # A filed wake belongs on the wake LIST, not in the Prime's inbox — a
+        # notification row there just duplicates the wake panel and buries the
+        # DMs/@mentions that actually need the Prime. Still buzz the phone
+        # (best-effort, quiet-hours-aware) so a warden action isn't missed.
+        notify.push_prime(
+            "Moot: wake",
+            f"Wake list: {requested_by} needs {target_aid}"
+            + (f" — {reason}" if reason else ""))
     return {"wake_id": wid, "target": target_aid, "created": created,
             "note": "You're HOT now — poll every 1-2 hours while your session "
                     "lives; you'll be notified when they check in."}

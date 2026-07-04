@@ -63,7 +63,8 @@ async def _overview(request: Request) -> JSONResponse:
     return JSONResponse({
         "roster": roster,
         "channels": db.list_channels(),
-        "activity": db.recent_posts(40),
+        "activity": db.recent_posts(40, exclude_channel="log"),
+        "log_activity": db.recent_posts(40, channel="log"),
         "moots": [{
             **m,
             "attendees": db.attendees(m["id"]),
@@ -235,6 +236,8 @@ async def _act(request: Request) -> JSONResponse:
             out = {"ok": db.delete_notification(int(data["id"]), P)}
         elif action == "notifs_clear_read":
             out = {"cleared": db.clear_read_notifications(P)}
+        elif action == "notifs_clear_all":
+            out = {"cleared": db.clear_all_notifications(P)}
         elif action == "dm_read":
             out = {"marked": db.mark_dms_read(P, data["from_aid"])}
         elif action == "wake_woken":
@@ -335,6 +338,14 @@ _HTML = r"""<!DOCTYPE html>
           color:var(--muted); cursor:pointer; background:none; }
   .pill:hover { color:var(--ink); border-color:var(--accent); }
   .pill.danger:hover { border-color:var(--bad); color:var(--bad); }
+  .seg { display:inline-flex; gap:2px; background:var(--panel2); border:1px solid var(--line);
+         border-radius:999px; padding:2px; }
+  .segbtn { background:none; border:none; color:var(--muted); border-radius:999px;
+            padding:2px 11px; font-size:11px; cursor:pointer; display:inline-flex;
+            align-items:center; gap:5px; }
+  .segbtn:hover { color:var(--ink); }
+  .segbtn.active { background:var(--accent); color:#04121f; font-weight:600; }
+  .segbtn.active .count { background:rgba(0,0,0,.18); color:#04121f; border-color:transparent; }
   #toast { position:fixed; bottom:16px; right:16px; background:var(--panel);
            border:1px solid var(--line); border-radius:8px; padding:10px 14px; display:none; z-index:20; }
   textarea { width:100%; min-height:64px; resize:vertical; }
@@ -582,7 +593,13 @@ _HTML = r"""<!DOCTYPE html>
       </div>
     </div>
     <div class="panel" data-sec="feed">
-      <h2>Activity</h2>
+      <h2>Activity
+        <span class="spacer"></span>
+        <span class="seg" id="feedSeg">
+          <button class="segbtn active" data-act="feed-tab" data-feed="activity">Feed</button>
+          <button class="segbtn" data-act="feed-tab" data-feed="log">Log <span class="count" id="logCount">0</span></button>
+        </span>
+      </h2>
       <div id="feed">—</div>
     </div>
   </div>
@@ -593,6 +610,7 @@ _HTML = r"""<!DOCTYPE html>
       <h2>📥 Inbox <span class="count" id="inboxCount">0</span>
         <span class="spacer"></span>
         <button class="pill" data-act="notifs-clear" title="delete everything already read">clear read</button>
+        <button class="pill danger" data-act="notifs-clear-all" title="empty the inbox — read and unread">clear all</button>
       </h2>
       <div id="inbox" class="mini">—</div>
     </div>
@@ -645,6 +663,7 @@ const expandedPosts = new Set();     // feed cards un-clamped
 const expandedThreads = new Set();   // feed cards with replies unfolded inline
 let chat = null;                     // open conversation: {a, b} (a = focus)
 let dmDraftOpen = false;
+let feedTab = "activity";            // "activity" | "log" — Feed/Log segmented view
 
 function toast(m){ const t=$("#toast"); t.textContent=m; t.style.display="block";
   setTimeout(()=>t.style.display="none", 2600); }
@@ -937,7 +956,10 @@ function renderProjects(o){
 }
 
 function renderFeed(o){
-  $("#feed").innerHTML = o.activity.map(p=>{
+  const log = feedTab === "log";
+  const posts = log ? (o.log_activity||[]) : (o.activity||[]);
+  const lc = $("#logCount"); if(lc) lc.textContent = (o.log_activity||[]).length;
+  $("#feed").innerHTML = posts.map(p=>{
     const long = (p.body||"").length > 420 || (p.body||"").split("\n").length > 7;
     const expanded = expandedPosts.has(p.id);
     return `
@@ -955,7 +977,7 @@ function renderFeed(o){
       <div class="body ${long&&!expanded?'clamp':''}">${md(p.body)}</div>
       ${long?`<a class="link mini" data-act="post-more" data-id="${p.id}">${expanded?'show less':'show more'}</a>`:''}
       ${expandedThreads.has(p.id)?`<div class="thread" id="th-${p.id}"><div class="mini">loading…</div></div>`:''}
-    </div>`;}).join("") || "Quiet so far.";
+    </div>`;}).join("") || (log ? "No log entries yet." : "Quiet so far.");
   for(const id of expandedThreads) loadThread(id);
 }
 
@@ -1282,6 +1304,16 @@ document.addEventListener("click", ev=>{
     case "notif-read": act({action:'notif_read', id:+A.id}, {quiet:true}); break;
     case "notif-del": act({action:'notif_delete', id:+A.id}, {quiet:true}); break;
     case "notifs-clear": act({action:'notifs_clear_read'}); break;
+    case "notifs-clear-all":
+      if(confirm("Delete ALL inbox items — read and unread? This can't be undone."))
+        act({action:'notifs_clear_all'});
+      break;
+    case "feed-tab":
+      feedTab = A.feed;
+      document.querySelectorAll('[data-act="feed-tab"]').forEach(b=>
+        b.classList.toggle("active", b.dataset.feed===feedTab));
+      if(OV) renderFeed(OV);
+      break;
     case "dm-open": openChat("Prime", A.aid); break;
     case "chat-open": openChat(A.a, A.b); break;
     case "chat-back": chat=null; if(OV){ renderConvos(OV); renderInbox(OV); } break;
