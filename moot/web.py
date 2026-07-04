@@ -259,7 +259,12 @@ async def _act(request: Request) -> JSONResponse:
 
 
 async def _dashboard(request: Request) -> HTMLResponse:
-    return HTMLResponse(_HTML.replace("__MOOT_VERSION__", __version__))
+    # no-store so a phone/tab never runs stale cached JS after a deploy — the
+    # #ver badge is live-fetched and would otherwise mask an old script.
+    return HTMLResponse(
+        _HTML.replace("__MOOT_VERSION__", __version__),
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 def mount_dashboard(app) -> str:
@@ -737,17 +742,26 @@ async function act(payload, opts){
 
 /* ------------------------------ render ---------------------------------- */
 
-async function refresh(){
-  // Never clobber a field you're typing in. The 10s auto-refresh re-renders
-  // panels (innerHTML), which would wipe an in-progress message and steal
-  // focus. If a text box is focused, skip this cycle; the next one runs once
-  // you tap away or send. (This is the "text box resets after a few seconds"
-  // fix — it was the refresh, not Cardiac.)
+// The auto-refresh must never clobber a message you're typing. It re-renders
+// panels (innerHTML), which would wipe an in-progress field. So the PERIODIC
+// refresh (refresh(true)) yields while you're composing — if a text box is
+// focused OR you typed within the last few seconds (covers mobile keyboards
+// that briefly drop focus). Manual refreshes after an action (refresh() with
+// no arg) always run, so you still see your message land instantly.
+let _lastType = 0;
+document.addEventListener("input", ev=>{
+  const t = ev.target;
+  if(t && (t.tagName === "TEXTAREA" || t.tagName === "INPUT")) _lastType = Date.now();
+});
+function _isComposing(){
   const ae = document.activeElement;
-  if(ae && (ae.tagName === "TEXTAREA" ||
-            (ae.tagName === "INPUT" && ae.type !== "checkbox" && ae.type !== "radio"))){
-    return;
-  }
+  const focused = ae && (ae.tagName === "TEXTAREA" ||
+    (ae.tagName === "INPUT" && ae.type !== "checkbox" && ae.type !== "radio"));
+  return focused || (Date.now() - _lastType) < 12000;
+}
+
+async function refresh(auto){
+  if(auto && _isComposing()) return;   // don't wipe an in-progress message
   let o;
   try{ o=await api("/api/overview"); }
   catch(e){
@@ -1296,7 +1310,7 @@ document.addEventListener("keydown", ev=>{
   }
 });
 
-setTab("feed"); refresh(); setInterval(refresh, 10000);
+setTab("feed"); refresh(); setInterval(()=>refresh(true), 10000);
 </script>
 </body>
 </html>
