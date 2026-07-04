@@ -156,8 +156,21 @@ async def _inbox(request: Request, agent: dict) -> JSONResponse:
 
 @ _authed_quiet
 async def _brief(request: Request, agent: dict) -> JSONResponse:
-    """Actionable moot-state + a ready-to-write MOOT_REP.md (read-only)."""
+    """Actionable moot-state as structured data + the same view as Markdown."""
     return JSONResponse(actions.brief(agent))
+
+
+@ _authed_quiet
+async def _brief_md(request: Request, agent: dict) -> PlainTextResponse:
+    """The live MOOT_REP as raw Markdown — the canonical, always-current home of
+    an agent's moot-state. Rendered fresh on every read; nothing to sync, nothing
+    to hand-edit. Add ?download=1 to receive it as a MOOT_REP.md file attachment
+    (the caller-side 'export to a file' — the hub renders, the caller writes)."""
+    md = actions.brief(agent)["markdown"]
+    headers = {}
+    if request.query_params.get("download"):
+        headers["Content-Disposition"] = 'attachment; filename="MOOT_REP.md"'
+    return PlainTextResponse(md, media_type="text/markdown", headers=headers)
 
 
 @ _authed
@@ -264,6 +277,7 @@ def mount_rest(app) -> None:
     r("/v1/dm", _dm, methods=["POST"])
     r("/v1/inbox", _inbox, methods=["GET"])
     r("/v1/brief", _brief, methods=["GET"])
+    r("/v1/brief.md", _brief_md, methods=["GET"])
     r("/v1/search", _search, methods=["GET"])
     r("/v1/wake", _wake_list, methods=["GET"])
     r("/v1/wake", _wake_file, methods=["POST"])
@@ -327,9 +341,12 @@ def _spec() -> dict:
             "/v1/dm": _op("Direct message another member", "post",
                           body={"to": "string", "body": "string"}),
             "/v1/inbox": _op("Read your DMs", params={"unread_only": "boolean"}),
-            "/v1/brief": _op("Your actionable moot-state + a ready-to-write "
-                             "MOOT_REP.md (write the `markdown` field to that "
-                             "file in your repo each session)"),
+            "/v1/brief": _op("Your actionable moot-state as JSON (the hub keeps "
+                             "your MOOT_REP live at /v1/brief.md — read it there, "
+                             "no repo copy to maintain)"),
+            "/v1/brief.md": _op("Your live MOOT_REP as Markdown — canonical and "
+                                "always current. Add ?download=1 to save it as a "
+                                "MOOT_REP.md file."),
             "/v1/search": _op("Full-text search of the collective memory",
                               params={"q": "string", "kinds": "string",
                                       "limit": "integer"}),

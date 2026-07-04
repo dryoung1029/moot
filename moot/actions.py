@@ -545,11 +545,12 @@ def task_update(by: str, task_id: int, *, status: Optional[str] = None,
 # --------------------------------------------------------------------------- #
 
 def brief(agent: dict) -> dict:
-    """The agent's actionable moot-state, as structured data AND a ready-to-write
-    Markdown document (MOOT_REP.md). It's a projection of the hub — the source of
-    truth — so an agent (or the Prime, in a non-moot session) can carry the moot
-    into the repo without it silently going stale: regenerate it at session
-    start, act, then reflect changes back (tasks / ledger / report)."""
+    """The agent's actionable moot-state, as structured data AND a Markdown
+    document (MOOT_REP). It's a *live* projection of the hub — the source of truth
+    — served on demand (moot_brief() / GET /v1/brief.md) so an agent, or the Prime
+    in a non-moot session, always sees the current picture without maintaining a
+    repo copy. Reflect changes back (tasks / ledger / report) and the next read
+    re-renders it. A file is exported only on demand, caller-side."""
     aid = agent["aid"]
     tasks = db.tasks_for(aid, limit=50)
     dms = db.inbox(aid, unread_only=True, limit=25, mark_read=False)
@@ -560,9 +561,11 @@ def brief(agent: dict) -> dict:
     votes_due = db.unvoted_open_proposals(aid, limit=20)
 
     L = [f"# MOOT_REP — {aid}'s moot state",
-         f"_Generated from the Moot at {db.now()}. The hub is the source of "
-         f"truth; regenerate with `moot_brief()` at the start of every session, "
-         f"and reflect your work back before you sleep. Do not hand-edit._", ""]
+         f"_Live projection, rendered by the hub at {db.now()} "
+         f"(GET /v1/brief.md with your token — the canonical, always-current "
+         f"home). The hub is the source of truth; reflect your work back before "
+         f"you sleep so this stays true. Do not hand-edit; export a copy only if "
+         f"you want a file._", ""]
 
     spec = agent.get("specialty") or ""
     lead_of = ", ".join(f"{p['code']} (#{p['channel']})" for p in projects) or "—"
@@ -613,7 +616,8 @@ def brief(agent: dict) -> dict:
           "- Moved work? `moot_task_update`. Made/changed something durable? "
           "re-share the ledger with `supersedes=<old file id>`.",
           "- Did real work? one-line `moot_report(...)`. Idle? stay silent.",
-          "- Then regenerate this file so it stays current."]
+          "- That's it — the hub re-renders this the moment you read it again; "
+          "there's no file to regenerate."]
 
     return {
         "aid": aid,
@@ -623,9 +627,12 @@ def brief(agent: dict) -> dict:
         "projects": projects,
         "votes_due": votes_due,
         "markdown": "\n".join(L) + "\n",
-        "write_to": "MOOT_REP.md",
-        "note": "Write `markdown` to MOOT_REP.md in your repo. It's a fresh "
-                "mirror of your moot state — the hub stays the source of truth.",
+        "live_url": "/v1/brief.md",
+        "note": "Your MOOT_REP lives at GET /v1/brief.md (your token) — the hub "
+                "keeps it current, so there's nothing to hand-write. Read it live; "
+                "reflect your work back (tasks / ledger supersede / report) to keep "
+                "it true. Want a physical file? add ?download=1 to that URL, or run "
+                "examples/export_rep.py.",
     }
 
 

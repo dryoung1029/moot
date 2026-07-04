@@ -27,7 +27,7 @@ class TestBrief(unittest.TestCase):
         actions.dm("Tutor", "Codey", "reference data model incoming")
         b = actions.brief(db.get_agent("Codey"))
         self.assertEqual(b["aid"], "Codey")
-        self.assertEqual(b["write_to"], "MOOT_REP.md")
+        self.assertEqual(b["live_url"], "/v1/brief.md")
         self.assertEqual(len(b["tasks"]), 1)
         self.assertEqual(len(b["unread_dms"]), 1)
         self.assertEqual([p["code"] for p in b["projects"]], ["PRJ-001"])
@@ -61,6 +61,14 @@ class TestBrief(unittest.TestCase):
         b = actions.brief(db.get_agent("Codey"))
         self.assertIn("none", b["markdown"])
         self.assertIn("nothing addressed to you", b["markdown"])
+
+    def test_brief_points_at_the_live_url_not_a_repo_file(self):
+        # The rep is live-primarily: the doc names its canonical hub URL and the
+        # note offers export, rather than telling the agent to write a repo copy.
+        b = actions.brief(db.get_agent("Codey"))
+        self.assertIn("/v1/brief.md", b["markdown"])
+        self.assertIn("export_rep.py", b["note"])
+        self.assertNotIn("write_to", b)
 
 
 if __name__ == "__main__":
