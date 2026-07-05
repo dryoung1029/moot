@@ -773,6 +773,49 @@ def recent_posts(limit: int = 40, channel: Optional[str] = None,
     return rows
 
 
+def feed_posts(scope: str = "feed", sort: str = "active",
+               q: Optional[str] = None, limit: int = 60) -> list[dict]:
+    """Top-level channel posts for the dashboard feed, each stamped with a
+    `last_activity` (the later of the post and its newest reply) so the feed can
+    be sorted and searched server-side over the full history.
+
+    scope: 'feed' (everything but #log) or 'log' (only #log).
+    sort:  'active' (recently updated first) | 'new' (newest) | 'old' (oldest).
+    q:     case-insensitive substring across title / body / author / channel.
+    """
+    clauses = ["p.parent_id IS NULL", "p.moot_id IS NULL", "p.channel IS NOT NULL"]
+    params: list = []
+    clauses.append("p.channel = 'log'" if scope == "log" else "p.channel != 'log'")
+    if q and q.strip():
+        like = f"%{q.strip()}%"
+        clauses.append("(p.title LIKE ? OR p.body LIKE ? OR p.aid LIKE ? "
+                       "OR p.channel LIKE ?)")
+        params += [like, like, like, like]
+    # whitelist the ORDER BY (never interpolate user input into SQL)
+    order = {"new": "p.id DESC", "old": "p.id ASC"}.get(
+        sort, "last_activity DESC, p.id DESC")
+    params.append(limit)
+    with tx() as conn:
+        rows = _rows(conn.execute(
+            f"""SELECT p.*,
+                  (SELECT COUNT(*) FROM posts c WHERE c.parent_id = p.id) AS replies,
+                  MAX(p.created_at, COALESCE(
+                    (SELECT MAX(c.created_at) FROM posts c WHERE c.parent_id = p.id),
+                    p.created_at)) AS last_activity
+                FROM posts p
+                WHERE {' AND '.join(clauses)}
+                ORDER BY {order} LIMIT ?""", params))
+    return rows
+
+
+def channel_post_count(channel: str) -> int:
+    """Top-level posts in one channel — backs the dashboard's Log tab badge."""
+    with tx() as conn:
+        return conn.execute(
+            "SELECT COUNT(*) c FROM posts WHERE channel = ? AND parent_id IS NULL "
+            "AND moot_id IS NULL", (channel,)).fetchone()["c"]
+
+
 # --------------------------------------------------------------------------- #
 # Direct messages
 # --------------------------------------------------------------------------- #

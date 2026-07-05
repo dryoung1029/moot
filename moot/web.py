@@ -63,8 +63,8 @@ async def _overview(request: Request) -> JSONResponse:
     return JSONResponse({
         "roster": roster,
         "channels": db.list_channels(),
-        "activity": db.recent_posts(40, exclude_channel="log"),
-        "log_activity": db.recent_posts(40, channel="log"),
+        # The feed is served separately (GET /api/feed) so it can be sorted and
+        # searched server-side; overview no longer carries the post list.
         "moots": [{
             **m,
             "attendees": db.attendees(m["id"]),
@@ -104,6 +104,18 @@ async def _dm_thread(request: Request) -> JSONResponse:
     a = request.path_params["a"]
     b = request.path_params["b"]
     return JSONResponse({"a": a, "b": b, "messages": db.dm_thread(a, b, 200)})
+
+
+async def _feed(request: Request) -> JSONResponse:
+    """The activity feed, sorted and searched server-side (over full history)."""
+    qp = request.query_params
+    scope = "log" if qp.get("scope") == "log" else "feed"
+    sort = qp.get("sort", "active")
+    q = (qp.get("q") or "").strip() or None
+    return JSONResponse({
+        "posts": db.feed_posts(scope=scope, sort=sort, q=q, limit=60),
+        "log_count": db.channel_post_count("log"),
+    })
 
 
 async def _channel(request: Request) -> JSONResponse:
@@ -277,6 +289,7 @@ def mount_dashboard(app) -> str:
     app.add_route("/", _dashboard, methods=["GET"])          # open: app shell only
     app.add_route("/healthz", _healthz, methods=["GET"])     # open: health probe
     app.add_route("/api/overview", _admin_only(_overview), methods=["GET"])
+    app.add_route("/api/feed", _admin_only(_feed), methods=["GET"])
     app.add_route("/api/channel/{name}", _admin_only(_channel), methods=["GET"])
     app.add_route("/api/thread/{post_id:int}", _admin_only(_thread), methods=["GET"])
     app.add_route("/api/moot/{moot_id:int}", _admin_only(_moot), methods=["GET"])
@@ -600,6 +613,14 @@ _HTML = r"""<!DOCTYPE html>
           <button class="segbtn" data-act="feed-tab" data-feed="log">Log <span class="count" id="logCount">0</span></button>
         </span>
       </h2>
+      <div class="row" id="feedControls">
+        <input id="feedQ" placeholder="🔍 search posts…" style="flex:2" autocomplete="off"/>
+        <select id="feedSort" style="flex:0 0 auto" title="Sort the feed">
+          <option value="active">Recently updated</option>
+          <option value="new">Newest first</option>
+          <option value="old">Oldest first</option>
+        </select>
+      </div>
       <div id="feed">—</div>
     </div>
   </div>
@@ -664,6 +685,10 @@ const expandedThreads = new Set();   // feed cards with replies unfolded inline
 let chat = null;                     // open conversation: {a, b} (a = focus)
 let dmDraftOpen = false;
 let feedTab = "activity";            // "activity" | "log" — Feed/Log segmented view
+let feedSort = "active";             // "active" (recently updated) | "new" | "old"
+let feedQuery = "";                  // feed search box
+let FEED = [];                       // posts for the current feed view (from /api/feed)
+let _feedSeq = 0;                    // guards against out-of-order feed responses
 let _replyDrafts = {};               // in-progress inline reply text, kept across feed re-renders
 let _replyFocus = null;              // id of the reply box that had focus, so we can restore it
 
@@ -802,7 +827,7 @@ async function refresh(auto){
     ? `Mute the fleet's personas (equivalent of saying “${o.safe_word||'GUPPI mode'}” to everyone)`
     : "Personas are muted fleet-wide — click to wake them";
   renderWakes(o); renderTasks(o); renderRoster(o); renderChannels(o);
-  renderDecisions(o); renderMoots(o); renderFiles(o); renderProjects(o); renderFeed(o); renderInbox(o); renderConvos(o);
+  renderDecisions(o); renderMoots(o); renderFiles(o); renderProjects(o); loadFeed(); renderInbox(o); renderConvos(o);
   if(chat) renderChat();   // keep an open chat live
 }
 
@@ -957,16 +982,28 @@ function renderProjects(o){
     </div>`).join("") : "No projects registered.";
 }
 
-function renderFeed(o){
+async function loadFeed(){
+  // The feed is fetched (not carried in overview) so sort + search happen
+  // server-side over the full history. _feedSeq drops out-of-order responses.
+  const scope = feedTab === "log" ? "log" : "feed";
+  const seq = ++_feedSeq;
+  let r;
+  try{ r = await api(`/api/feed?scope=${scope}&sort=${encodeURIComponent(feedSort)}&q=${encodeURIComponent(feedQuery)}`); }
+  catch(e){ return; }
+  if(seq !== _feedSeq) return;            // a newer request superseded this one
+  FEED = r.posts || [];
+  const lc = $("#logCount"); if(lc) lc.textContent = (r.log_count!=null ? r.log_count : "");
+  drawFeed();
+}
+
+function drawFeed(){
   // Preserve any in-progress inline reply before we replace #feed (belt-and-
   // suspenders behind the compose guard: even a stray re-render can't eat text).
   document.querySelectorAll('#feed textarea[id^="rt-"]').forEach(t=>{ _replyDrafts[t.id]=t.value; });
   const _ae=document.activeElement;
   _replyFocus = (_ae && _ae.id && _ae.id.indexOf("rt-")===0) ? _ae.id : null;
   const log = feedTab === "log";
-  const posts = log ? (o.log_activity||[]) : (o.activity||[]);
-  const lc = $("#logCount"); if(lc) lc.textContent = (o.log_activity||[]).length;
-  $("#feed").innerHTML = posts.map(p=>{
+  $("#feed").innerHTML = FEED.map(p=>{
     const long = (p.body||"").length > 420 || (p.body||"").split("\n").length > 7;
     const expanded = expandedPosts.has(p.id);
     return `
@@ -984,7 +1021,8 @@ function renderFeed(o){
       <div class="body ${long&&!expanded?'clamp':''}">${md(p.body)}</div>
       ${long?`<a class="link mini" data-act="post-more" data-id="${p.id}">${expanded?'show less':'show more'}</a>`:''}
       ${expandedThreads.has(p.id)?`<div class="thread" id="th-${p.id}"><div class="mini">loading…</div></div>`:''}
-    </div>`;}).join("") || (log ? "No log entries yet." : "Quiet so far.");
+    </div>`;}).join("") ||
+    (feedQuery ? `No posts match “${esc(feedQuery)}”.` : (log ? "No log entries yet." : "Quiet so far."));
   for(const id of expandedThreads) loadThread(id);
 }
 
@@ -1257,11 +1295,11 @@ document.addEventListener("click", ev=>{
     case "pin": act({action:'pin', post_id:+A.id, unpin:A.pinned==="1"}); break;
     case "post-more":
       if(expandedPosts.has(+A.id)) expandedPosts.delete(+A.id); else expandedPosts.add(+A.id);
-      if(OV) renderFeed(OV); break;
+      drawFeed(); break;                 // UI toggle only — no re-fetch
     case "show-thread": showThread(+A.id); break;
     case "thread-toggle":
       if(expandedThreads.has(+A.id)) expandedThreads.delete(+A.id); else expandedThreads.add(+A.id);
-      if(OV) renderFeed(OV); break;
+      drawFeed(); break;                 // UI toggle only — no re-fetch
     case "reply-inline": {
       const ta=document.getElementById("rt-"+A.id);
       const body=ta?ta.value.trim():"";
@@ -1325,7 +1363,7 @@ document.addEventListener("click", ev=>{
       feedTab = A.feed;
       document.querySelectorAll('[data-act="feed-tab"]').forEach(b=>
         b.classList.toggle("active", b.dataset.feed===feedTab));
-      if(OV) renderFeed(OV);
+      loadFeed();                        // scope changed — re-fetch
       break;
     case "dm-open": openChat("Prime", A.aid); break;
     case "chat-open": openChat(A.a, A.b); break;
@@ -1352,6 +1390,18 @@ document.addEventListener("keydown", ev=>{
   if(ev.target && ev.target.id==="chatText" && ev.key==="Enter" && !ev.shiftKey){
     ev.preventDefault();
     const btn=document.querySelector('[data-act="chat-send"]'); if(btn) btn.click();
+  }
+});
+
+// Feed controls: sort dropdown (instant) and search box (debounced).
+document.addEventListener("change", ev=>{
+  if(ev.target && ev.target.id==="feedSort"){ feedSort=ev.target.value; loadFeed(); }
+});
+let _searchT = 0;
+document.addEventListener("input", ev=>{
+  if(ev.target && ev.target.id==="feedQ"){
+    feedQuery = ev.target.value;
+    clearTimeout(_searchT); _searchT = setTimeout(loadFeed, 250);
   }
 });
 
