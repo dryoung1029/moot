@@ -664,6 +664,8 @@ const expandedThreads = new Set();   // feed cards with replies unfolded inline
 let chat = null;                     // open conversation: {a, b} (a = focus)
 let dmDraftOpen = false;
 let feedTab = "activity";            // "activity" | "log" — Feed/Log segmented view
+let _replyDrafts = {};               // in-progress inline reply text, kept across feed re-renders
+let _replyFocus = null;              // id of the reply box that had focus, so we can restore it
 
 function toast(m){ const t=$("#toast"); t.textContent=m; t.style.display="block";
   setTimeout(()=>t.style.display="none", 2600); }
@@ -956,6 +958,11 @@ function renderProjects(o){
 }
 
 function renderFeed(o){
+  // Preserve any in-progress inline reply before we replace #feed (belt-and-
+  // suspenders behind the compose guard: even a stray re-render can't eat text).
+  document.querySelectorAll('#feed textarea[id^="rt-"]').forEach(t=>{ _replyDrafts[t.id]=t.value; });
+  const _ae=document.activeElement;
+  _replyFocus = (_ae && _ae.id && _ae.id.indexOf("rt-")===0) ? _ae.id : null;
   const log = feedTab === "log";
   const posts = log ? (o.log_activity||[]) : (o.activity||[]);
   const lc = $("#logCount"); if(lc) lc.textContent = (o.log_activity||[]).length;
@@ -1113,9 +1120,14 @@ function openChat(a, b){
 async function loadThread(id){
   const box = document.getElementById("th-"+id);
   if(!box) return;
+  // recover an in-progress draft — from the current box, or from the stash a
+  // feed re-render left behind (renderFeed wipes the textarea before we run).
+  const cur = box.querySelector("textarea");
+  const draft = (cur && cur.value) || _replyDrafts["rt-"+id] || "";
+  const wasFocused = _replyFocus === "rt-"+id || (cur && document.activeElement === cur);
+  delete _replyDrafts["rt-"+id];
   let t;
   try{ t = await api("/api/thread/"+id); } catch(e){ return; }
-  const draft = box.querySelector("textarea") ? box.querySelector("textarea").value : "";
   box.innerHTML = (t.replies||[]).map(r=>`
     <div class="reply">
       <div class="meta">${avatar(r.aid,true)} <span class="who">${esc(r.aid)}</span>
@@ -1126,6 +1138,7 @@ async function loadThread(id){
       <button class="primary" data-act="reply-inline" data-id="${id}" style="flex:0 0 auto; align-self:flex-end">Reply</button></div>`:"");
   const ta = document.getElementById("rt-"+id);
   if(ta && draft) ta.value = draft;
+  if(ta && wasFocused){ ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
 }
 
 /* ------------------------------ details --------------------------------- */
