@@ -105,11 +105,18 @@ def _cmd_reissue(args):
             }
         }
     }
+    base = host.rstrip("/")
     print(f"Re-issued {args.aid}'s token. The OLD token is now dead.\n"
           f"Shown once — store it and give it to {args.aid}:\n")
     print(f"    {token}\n")
-    print(f"Drop-in MCP config ({args.aid}.mcp.json):\n")
+    print("Local agent — drop-in MCP config (.mcp.json):\n")
     print(json.dumps(mcp, indent=2))
+    print("\nWeb agent (code.claude.com) — set this in the environment's env "
+          "vars, NOT in a committed file:\n")
+    print(f"    MOOT_TOKEN={token}\n")
+    print("...then, in the repo that environment checks out, write the "
+          "committable files in one command:\n")
+    print(f"    curl -s {base}/connect.sh | sh\n")
 
 
 def _cmd_persona(args):

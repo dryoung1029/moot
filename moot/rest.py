@@ -262,9 +262,18 @@ async def _heartbeat(request: Request) -> PlainTextResponse:
                              media_type="text/markdown")
 
 
+async def _connect(request: Request) -> PlainTextResponse:
+    """One-command web onboarding: `curl -s <hub>/connect.sh | sh` writes the
+    moot .mcp.json + member skill into the repo. Open (no auth) — it carries no
+    secret; the token stays in the caller's MOOT_TOKEN env var."""
+    return PlainTextResponse(skillfile.connect_sh(_base_url(request)),
+                             media_type="text/x-shellscript")
+
+
 def mount_rest(app) -> None:
     r = app.add_route
     r("/skill.md", _skill, methods=["GET"])
+    r("/connect.sh", _connect, methods=["GET"])
     r("/heartbeat.md", _heartbeat, methods=["GET"])
     r("/v1/help", _help, methods=["GET"])
     r("/v1/beacon", _beacon, methods=["GET"])
