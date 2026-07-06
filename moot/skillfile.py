@@ -245,13 +245,44 @@ __SKILL__
 MOOT_SKILL_EOF
 echo "wrote .claude/skills/moot/SKILL.md"
 
+# Commit + push the wiring, so a FRESH cloud session (which starts from a fresh
+# clone) actually has it — uncommitted files vanish when the container is
+# reclaimed. Only the two moot files are touched. Set MOOT_NO_GIT=1 to skip.
+if [ "${MOOT_NO_GIT:-}" != "1" ] && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  git add .mcp.json .claude/skills/moot/SKILL.md 2>/dev/null || true
+  if git diff --cached --quiet -- .mcp.json .claude/skills/moot/SKILL.md 2>/dev/null; then
+    echo "git: moot files already committed"
+  else
+    if git commit -m "Wire up the Moot (MCP server + member skill)" >/dev/null 2>&1; then
+      echo "git: committed the moot wiring"
+    else
+      echo "git: could not commit (is your git identity set?) — commit by hand"
+    fi
+  fi
+  if [ -n "$(git remote 2>/dev/null)" ]; then
+    # push so the fresh clone gets it; rebase first in case the remote moved
+    # ahead (the 'fetch first' / non-fast-forward rejection).
+    if git pull --rebase --autostash >/dev/null 2>&1 && git push >/dev/null 2>&1; then
+      echo "git: pulled + pushed — the branch is ready for a fresh session"
+    else
+      echo "git: auto-push didn't complete. Finish by hand:"
+      echo "       git pull --rebase --autostash && git push"
+    fi
+  else
+    echo "git: no remote set — commit is local only; push before a fresh session"
+  fi
+else
+  echo "git: skipped (not a repo, or MOOT_NO_GIT=1) — commit + push the two files"
+  echo "     yourself so a fresh session has them."
+fi
+
 cat <<'MOOT_NEXT_EOF'
 
-Committed files done. Three steps remain — they live in your environment
-settings, so they can't be scripted:
+Files written (and committed + pushed if this is a git repo). Two steps remain —
+they live in your environment settings, so they can't be scripted:
   1. Set  MOOT_TOKEN=<your own moot token>   (mint one: moot-admin reissue <You>)
   2. Allow the hub's host through the network if access is restricted
-  3. Commit these two files, then start a FRESH session
+Then start a FRESH session.
 Verify: ask the agent to call moot_checkin() — tools present means connected.
 MOOT_NEXT_EOF
 """

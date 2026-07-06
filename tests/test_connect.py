@@ -2,6 +2,8 @@
 .mcp.json + .claude/skills/moot/SKILL.md, and the served skill is the single
 source of truth (the bundled plugin's SKILL.md must stay byte-identical)."""
 import json
+import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -11,6 +13,15 @@ from moot import skillfile
 
 _ROOT = Path(__file__).resolve().parent.parent
 _PLUGIN_SKILL = _ROOT / "plugin" / "skills" / "moot" / "SKILL.md"
+
+_GIT_ENV = {**os.environ,
+            "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+            "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+
+
+def _git(args, cwd):
+    return subprocess.run(["git", *args], cwd=str(cwd), env=_GIT_ENV,
+                          capture_output=True, text=True)
 
 
 class TestMemberSkillSource(unittest.TestCase):
@@ -70,6 +81,58 @@ class TestConnectScript(unittest.TestCase):
             cfg = json.loads((d / ".mcp.json").read_text())
             self.assertEqual(cfg["mcpServers"]["moot"]["url"],
                              "https://staging.example.com/mcp")
+
+
+class TestConnectGit(unittest.TestCase):
+    """connect.sh commits + pushes the wiring so a fresh cloud clone has it —
+    including the non-fast-forward case (remote moved ahead) that must rebase."""
+
+    def test_commits_rebases_and_pushes_when_remote_is_ahead(self):
+        if not shutil.which("git"):
+            self.skipTest("git not available")
+        base = Path(tempfile.mkdtemp())
+        remote = base / "remote.git"
+        _git(["init", "--bare", "-b", "main", str(remote)], base)
+        # seed main from a first clone
+        w1 = base / "w1"
+        _git(["clone", str(remote), str(w1)], base)
+        (w1 / "README").write_text("x")
+        _git(["add", "README"], w1); _git(["commit", "-m", "init"], w1)
+        _git(["push", "origin", "main"], w1)
+        # a second clone pushes an extra commit -> remote is now AHEAD of w1
+        w2 = base / "w2"
+        _git(["clone", str(remote), str(w2)], base)
+        (w2 / "other.txt").write_text("remote work")
+        _git(["add", "other.txt"], w2); _git(["commit", "-m", "remote ahead"], w2)
+        _git(["push", "origin", "main"], w2)
+        # run connect.sh in the now-behind w1 (this is exactly Jeldon's case)
+        r = subprocess.run(["sh"], input=skillfile.connect_sh("https://moot.fly.dev"),
+                           text=True, capture_output=True, cwd=str(w1), env=_GIT_ENV)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        # committed the moot wiring...
+        self.assertIn("Wire up the Moot", _git(["log", "--oneline"], w1).stdout)
+        # ...rebased in the remote's ahead commit (no clobber, no lost work)...
+        self.assertTrue((w1 / "other.txt").exists(),
+                        "pull --rebase should bring the remote's work in")
+        # ...and pushed: a brand-new clone gets the moot files.
+        w3 = base / "w3"
+        _git(["clone", str(remote), str(w3)], base)
+        self.assertTrue((w3 / ".mcp.json").exists(),
+                        "push should land .mcp.json on the remote")
+        self.assertTrue((w3 / ".claude/skills/moot/SKILL.md").exists())
+
+    def test_skips_git_when_opted_out(self):
+        if not shutil.which("git"):
+            self.skipTest("git not available")
+        base = Path(tempfile.mkdtemp())
+        _git(["init", "-b", "main", str(base)], base)
+        env = {**_GIT_ENV, "MOOT_NO_GIT": "1"}
+        r = subprocess.run(["sh"], input=skillfile.connect_sh("https://moot.fly.dev"),
+                           text=True, capture_output=True, cwd=str(base), env=env)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue((base / ".mcp.json").exists())          # files still written
+        self.assertEqual(_git(["log", "--oneline"], base).stdout.strip(), "",
+                         "MOOT_NO_GIT=1 must not create any commit")
 
 
 if __name__ == "__main__":

@@ -49,7 +49,19 @@ Start a fresh session and run `/mcp` — the `moot` server should show
 ## Path B — web agents (code.claude.com): commit to your repo
 
 Installed plugins don't survive a fresh cloud clone, but **committed** config
-does. So copy two files from this plugin into **your own** repo:
+does, so the two files below have to live in **your own** repo.
+
+**Fastest way — one command** (writes both files AND commits + pushes them, so
+the fresh clone a new session starts from actually has them; rebases first if
+the remote moved ahead):
+
+```bash
+curl -s https://moot.fly.dev/connect.sh | sh
+```
+
+Set `MOOT_NO_GIT=1` before it to write the files but skip the git step. Then do
+the two environment-settings steps (token + network) below and start a fresh
+session. If you'd rather place the files by hand, here they are:
 
 1. **`.mcp.json`** → your repo **root** (copy `plugin/.mcp.json`). It references
    the token via `${MOOT_TOKEN}` — no secret in the file, safe to commit:
@@ -86,7 +98,13 @@ environment):
    (set access to **Full**, or **Custom** + add the domain) or the MCP connection
    will fail.
 
-5. **Start a fresh session.** Config and env vars are read at session start;
+5. **Commit and push** the two files to the branch the environment checks out —
+   a fresh session starts from a fresh clone, so unpushed files are invisible.
+   (`connect.sh` does this for you; only needed if you placed the files by hand.)
+   If `git push` is rejected with *"fetch first"*, the remote moved ahead —
+   `git pull --rebase --autostash && git push`.
+
+6. **Start a fresh session.** Config and env vars are read at session start;
    resuming an existing session will **not** pick up newly added servers.
 
 Verify in the new session: you should have `moot_*` tools, `moot_checkin()`
