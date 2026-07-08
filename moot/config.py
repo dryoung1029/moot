@@ -77,6 +77,20 @@ WAKE_UNREAD_HOURS = float(os.environ.get("MOOT_WAKE_UNREAD_HOURS", "0.5"))
 # POSTed there, so the Prime's phone buzzes instead of the Prime polling.
 PRIME_PUSH_URL = os.environ.get("MOOT_PRIME_PUSH_URL") or None
 
+# --- Wake signals v1 (file 27, the frozen Tier 0 contract) ------------------
+# coalesce_bucket = floor(ts / settle_seconds): a fast burst of distinct wake
+# signals to one recipient on one thread folds into one. Extends Doc's 2s
+# settle across posts, not just within one.
+WAKE_SIGNAL_SETTLE_SECONDS = float(os.environ.get("MOOT_WAKE_SIGNAL_SETTLE_SECONDS", "2"))
+# The recipient cap (protects the sink): how many 'summon' wake signals a
+# single recipient may be filed a wake-list entry for per rolling 24h. A
+# recipient at/over cap still gets the notification — only the wake-list
+# filing (and thus a fresh session spawn) is withheld. 0 disables the cap.
+# Config, not a constant, so Bill can tune it for a busy week without a code
+# change. Sender/thread fan-out budget (protects the source) is a distinct,
+# deliberately deferred, additive-later mechanism (file 27 §8).
+WAKE_SUMMON_DAILY_CAP = int(os.environ.get("MOOT_WAKE_SUMMON_DAILY_CAP", "20"))
+
 # --- The Steward (Bill's background housekeeping loop) ---------------------- #
 # Master switch. "0"/"false"/"off" disables all autonomous behavior.
 STEWARD_ENABLED = os.environ.get("MOOT_STEWARD", "1").lower() not in ("0", "false", "off")

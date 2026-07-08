@@ -149,7 +149,7 @@ def moot_help() -> dict:
             "presence": ["moot_checkin", "moot_notifications", "moot_summon",
                          "moot_broadcast", "moot_set_webhook", "moot_report"],
             "wake_protocol": ["moot_request_wake", "moot_wake_list",
-                              "moot_mark_woken"],
+                              "moot_mark_woken", "moot_wake_signal"],
             "tasks": ["moot_task_add", "moot_task_update", "moot_tasks",
                       "moot_scoreboard"],
             "archive": ["moot_share_file", "moot_list_files", "moot_get_file"],
@@ -506,6 +506,36 @@ def moot_request_wake(ctx: Context, aid: str, reason: str) -> dict:
     files this automatically — use this tool when the need is explicit."""
     me = _me(ctx)
     return actions.request_wake(me["aid"], aid, reason)
+
+
+@mcp.tool()
+def moot_wake_signal(
+    ctx: Context,
+    recipients: list[str],
+    kind: str,
+    post_id: Optional[int] = None,
+    channel: Optional[str] = None,
+    body: Optional[str] = None,
+    reply_to: Optional[int] = None,
+    idempotency_key: Optional[str] = None,
+) -> dict:
+    """File typed wake signals for one or more recipients (file 27, the frozen
+    Tier 0 contract). Pick intent per message: 'mention' just queues a
+    notification for each recipient's next check-in and is free; 'summon'
+    also files a wake-list entry (a warden starts them a session) and spends
+    the recipient's daily summon cap. One call, one row per recipient — a
+    group summon fans out independently per member, not as one shared wake.
+    Retries and concurrent fan-out are deduped by the database: pass your own
+    `idempotency_key` for a logical action you might retry, or omit it and
+    the hub fills one in. This is the frozen surface small-group DMs and
+    future skip-if-HOT spawning build on — most callers want moot_summon or a
+    plain @mention in a post instead of calling this directly."""
+    me = _me(ctx)
+    if not recipients:
+        raise ValueError("recipients is required")
+    return {"signals": actions.fan_out_wake_signals(
+        me["aid"], recipients, kind, post_id=post_id, channel=channel,
+        body=body, reply_to=reply_to, idempotency_key=idempotency_key)}
 
 
 @mcp.tool()

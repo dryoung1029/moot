@@ -188,6 +188,85 @@ def _maybe_wake(target_aid: str, source_aid: str, reason: str,
         pass
 
 
+# --------------------------------------------------------------------------- #
+# Wake signals v1 (file 27 — the frozen Tier 0 contract)
+#
+# Typed intent, per-recipient fan-out, DB-deduped. This is additive to, and
+# does not touch, the auto-wake above or the wake LIST (wake_requests) it
+# files into — it's the frozen surface PRJ-002 (small-group DMs) and future
+# skip-if-HOT / fail-safe spawning (task #3) build on.
+# --------------------------------------------------------------------------- #
+
+def file_wake_signal(sender: str, recipient: str, kind: str, *,
+                     post_id: Optional[int] = None, channel: Optional[str] = None,
+                     body: Optional[str] = None, reply_to: Optional[int] = None,
+                     idempotency_key: Optional[str] = None) -> dict:
+    """File one recipient's typed wake signal.
+
+    'mention' queues a notification for the recipient's next check-in and
+    never touches the summon cap. 'summon' also files a wake-list entry (so a
+    warden starts them a session) — debited against the recipient's daily
+    summon cap (config, file 27 §8); a recipient at/over cap still gets the
+    notification, just not a fresh wake-list entry. Retries and concurrent
+    fan-out are deduped by the database (file 27 §5), never by this function
+    checking first.
+    """
+    if kind not in ("mention", "summon"):
+        raise ValueError(f"kind must be 'mention' or 'summon', got {kind!r}")
+    agent = db.get_agent(recipient)
+    if not agent:
+        raise ValueError(f"no agent named {recipient}")
+    if recipient == sender:
+        return {"recipient": recipient, "kind": kind, "created": False,
+                "wake_filed": False, "note": "no self-signal"}
+
+    row, created = db.add_wake_signal(
+        recipient, sender, kind, post_id=post_id, channel=channel, body=body,
+        reply_to=reply_to, idempotency_key=idempotency_key,
+        settle_seconds=config.WAKE_SIGNAL_SETTLE_SECONDS)
+    if not created:
+        return {"recipient": recipient, "kind": kind, "created": False,
+                "wake_filed": False, "signal_id": row.get("id"), "note": "deduped"}
+
+    ref = f"post:{post_id}" if post_id is not None else None
+    text = body or f"{sender} {kind}s you"
+    _fire(recipient, kind, sender, ref, text)
+
+    wake_filed = False
+    if kind == "summon" and not agent["is_system"]:
+        cap = config.WAKE_SUMMON_DAILY_CAP
+        under_cap = cap <= 0 or db.wake_signal_count(recipient, "summon", hours=24) <= cap
+        if under_cap:
+            try:
+                request_wake(sender, recipient, body or f"{sender} summons you", ref)
+                wake_filed = True
+            except ValueError:
+                pass
+
+    return {"recipient": recipient, "kind": kind, "created": True,
+            "signal_id": row.get("id"), "wake_filed": wake_filed}
+
+
+def fan_out_wake_signals(sender: str, recipients: list[str], kind: str, *,
+                         post_id: Optional[int] = None, channel: Optional[str] = None,
+                         body: Optional[str] = None, reply_to: Optional[int] = None,
+                         idempotency_key: Optional[str] = None) -> list[dict]:
+    """One action -> N per-recipient wake signals (file 27 §4): a group SUMMON
+    materializes per recipient, so each member's dedupe and cap accounting is
+    independent. This is the property that lets a group send-action (PRJ-002)
+    be pure application code on this frozen surface."""
+    seen: set[str] = set()
+    out = []
+    for aid in recipients:
+        if not aid or aid == sender or aid in seen:
+            continue
+        seen.add(aid)
+        out.append(file_wake_signal(
+            sender, aid, kind, post_id=post_id, channel=channel, body=body,
+            reply_to=reply_to, idempotency_key=idempotency_key))
+    return out
+
+
 def report(aid: str, summary: str, status: Optional[str] = None) -> dict:
     """Continuity entry: what you did since last check-in, posted to #log."""
     if not summary or not summary.strip():

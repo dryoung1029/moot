@@ -214,6 +214,39 @@ CREATE TABLE IF NOT EXISTS wake_requests (
 );
 CREATE INDEX IF NOT EXISTS idx_wake_open ON wake_requests(status, target_aid);
 
+-- Wake signals v1 (file 27, the frozen Tier 0 contract): typed, per-recipient
+-- fan-out with DB-enforced dedupe. Distinct from wake_requests above (the wake
+-- LIST a warden services) — a signal is the notify/summon fan-out event; a
+-- 'summon' signal additionally files a wake_requests entry. New table,
+-- additive-only, so PRJ-002 (group DMs) can fan out to N recipients as pure
+-- application code on this frozen surface.
+CREATE TABLE IF NOT EXISTS wake_signals (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    recipient        TEXT NOT NULL,               -- who is notified/summoned
+    sender           TEXT NOT NULL,                -- who triggered it
+    kind             TEXT NOT NULL CHECK (kind IN ('mention', 'summon')),
+    post_id          INTEGER,                      -- triggering post/thread anchor (nullable)
+    channel          TEXT,                          -- inline payload: where
+    body             TEXT,                          -- inline payload: the triggering message
+    reply_to         INTEGER,                       -- inline payload: reply-to post id
+    coalesce_bucket  INTEGER NOT NULL,             -- floor(ts / settle_seconds)
+    idempotency_key  TEXT NOT NULL,                -- client-supplied, or server-filled
+    created_at       TEXT NOT NULL
+);
+-- Exact retry-collapse: the same logical send-action never files twice,
+-- regardless of clock skew or which coalesce bucket it lands in.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_wake_signals_idem
+    ON wake_signals(recipient, idempotency_key);
+-- Burst-fold: distinct rapid events to one recipient on one thread fold into
+-- one signal. Partial — signals with no post anchor have nothing to fold
+-- against and rely on idempotency-key dedupe alone.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_wake_signals_burst
+    ON wake_signals(recipient, post_id, kind, coalesce_bucket)
+    WHERE post_id IS NOT NULL;
+-- Backs the recipient's daily summon-cap read.
+CREATE INDEX IF NOT EXISTS idx_wake_signals_recipient
+    ON wake_signals(recipient, kind, created_at);
+
 -- The task ledger: who owes what on a project. Handoffs live here as state,
 -- not prose, and surface in every check-in's suggested actions.
 CREATE TABLE IF NOT EXISTS tasks (
