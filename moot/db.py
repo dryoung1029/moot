@@ -1604,6 +1604,76 @@ def resolve_wakes_for(aid: str) -> list[dict]:
         return rows
 
 
+# --------------------------------------------------------------------------- #
+# Wake signals v1 (file 27 — typed, per-recipient, DB-deduped fan-out)
+# --------------------------------------------------------------------------- #
+
+def _default_wake_idempotency_key(sender: str, post_id: Optional[int], kind: str,
+                                   recipient: str) -> str:
+    """Server-fill when the caller supplies no idempotency_key (file 27 §7).
+    A fan-out row (anchored to a post) gets a deterministic hash of
+    (sender, post_id, kind, recipient) so a retry of the same logical action
+    always collapses. With no post anchor there is nothing safe to hash — every
+    unrelated direct signal from the same sender to the same recipient would
+    collide — so that case gets a fresh random key instead."""
+    if post_id is not None:
+        raw = f"{sender}|{post_id}|{kind}|{recipient}"
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    return secrets.token_hex(16)
+
+
+def add_wake_signal(recipient: str, sender: str, kind: str, *, settle_seconds: float,
+                    post_id: Optional[int] = None, channel: Optional[str] = None,
+                    body: Optional[str] = None, reply_to: Optional[int] = None,
+                    idempotency_key: Optional[str] = None) -> tuple[dict, bool]:
+    """File one recipient's typed wake signal. Dedupe is entirely DB-side via
+    INSERT ... ON CONFLICT DO NOTHING against either UNIQUE constraint —
+    idx_wake_signals_idem (exact retry-collapse) or idx_wake_signals_burst
+    (burst-fold of distinct rapid events) — never app-side check-then-insert,
+    which loses the retry / concurrent-warden race. Returns (row, created);
+    on a dedupe, row is the signal it collided with."""
+    if kind not in ("mention", "summon"):
+        raise ValueError(f"unknown wake signal kind: {kind!r}")
+    created_at = now()
+    epoch = datetime.fromisoformat(created_at).timestamp()
+    bucket = int(epoch // max(settle_seconds, 1e-9))
+    key = idempotency_key or _default_wake_idempotency_key(sender, post_id, kind, recipient)
+    with tx() as conn:
+        cur = conn.execute(
+            """INSERT INTO wake_signals(recipient, sender, kind, post_id, channel,
+                   body, reply_to, coalesce_bucket, idempotency_key, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT DO NOTHING""",
+            (recipient, sender, kind, post_id, channel, body, reply_to,
+             bucket, key, created_at))
+        if cur.rowcount:
+            row = conn.execute(
+                "SELECT * FROM wake_signals WHERE id = ?", (cur.lastrowid,)).fetchone()
+            return dict(row), True
+        row = conn.execute(
+            "SELECT * FROM wake_signals WHERE recipient = ? AND idempotency_key = ?",
+            (recipient, key)).fetchone()
+        if row is None and post_id is not None:
+            row = conn.execute(
+                """SELECT * FROM wake_signals WHERE recipient = ? AND post_id = ?
+                   AND kind = ? AND coalesce_bucket = ?""",
+                (recipient, post_id, kind, bucket)).fetchone()
+        return (dict(row) if row else {}), False
+
+
+def wake_signal_count(recipient: str, kind: str, hours: float) -> int:
+    """How many `kind` signals `recipient` has received in the trailing window
+    — backs the recipient's daily summon-cap read (config, never a constant)."""
+    cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat(
+        timespec="seconds")
+    with tx() as conn:
+        row = conn.execute(
+            """SELECT COUNT(*) c FROM wake_signals
+               WHERE recipient = ? AND kind = ? AND created_at >= ?""",
+            (recipient, kind, cutoff)).fetchone()
+        return row["c"]
+
+
 # Notification kinds that demand the recipient's attention (vs. ambient FYIs
 # like broadcasts and digests). The steward wakes agents sitting on these.
 _ACTIONABLE_KINDS = "('dm','mention','summon','task','reply','moot','vote')"
