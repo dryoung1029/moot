@@ -99,6 +99,42 @@ async def _wake(request: Request) -> JSONResponse:
     return JSONResponse({"wake_requests": db.list_wake_requests(open_only=True)})
 
 
+async def _catchup(request: Request) -> JSONResponse:
+    """The Prime's on-demand "what did I miss" digest, since a Prime-picked
+    cutoff. Pure aggregation, no side effects — unlike /api/overview's
+    prime_inbox, nothing here is marked read by viewing it."""
+    since = request.query_params.get("since")
+    if not since:
+        return JSONResponse({"error": "since is required (ISO-8601 timestamp)"},
+                            status_code=400)
+    P = "Prime"
+    wakes = db.list_wake_requests(open_only=True)
+    for w in wakes:
+        w["overdue"] = bool(w["escalated"]) or \
+            db.hours_since(w["created_at"]) >= config.WAKE_ESCALATE_HOURS
+    return JSONResponse({
+        "since": since,
+        "needs_you": {
+            "unread_dms": db.dms_unread_since(P, since),
+            "awaiting_signature": [
+                {**p, "tally": db.member_tally(p["id"])}
+                for p in db.decisions_awaiting() if p["status"] == "awaiting_prime"],
+            "wake_list": wakes,
+            "flood_incidents": db.notifications_since(P, "flood", since),
+        },
+        "decisions": [{**p, "tally": db.tally(p["id"])}
+                      for p in db.proposals_resolved_since(since)],
+        "notable_threads": db.notable_threads_since(since),
+        "housekeeping": {
+            "new_agents": db.agents_registered_since(since),
+            "files": db.files_since(since),
+            "tasks": db.tasks_changed_since(since),
+            "moots_convened": db.moots_since(since),
+            "moots_adjourned": db.moots_adjourned_since(since),
+        },
+    })
+
+
 async def _dm_thread(request: Request) -> JSONResponse:
     """One conversation (both directions) for the dashboard's chat view."""
     a = request.path_params["a"]
@@ -295,6 +331,7 @@ def mount_dashboard(app) -> str:
     app.add_route("/api/moot/{moot_id:int}", _admin_only(_moot), methods=["GET"])
     app.add_route("/api/file/{file_id:int}", _admin_only(_file), methods=["GET"])
     app.add_route("/api/wake", _admin_only(_wake), methods=["GET"])
+    app.add_route("/api/catchup", _admin_only(_catchup), methods=["GET"])
     app.add_route("/api/dms/{a}/{b}", _admin_only(_dm_thread), methods=["GET"])
     app.add_route("/api/act", _act, methods=["POST"])        # self-guards
     return _ADMIN_KEY
@@ -339,6 +376,9 @@ _HTML = r"""<!DOCTYPE html>
   .panel h2 { font-size:12px; text-transform:uppercase; letter-spacing:.08em;
            color:var(--muted); margin:0 0 8px; display:flex; align-items:center; gap:6px; }
   .panel h2 .spacer { flex:1; }
+  #detail h3 { font-size:12px; text-transform:uppercase; letter-spacing:.08em;
+           color:var(--muted); margin:16px 0 6px; }
+  #detail h3:first-child { margin-top:0; }
   .count { background:var(--panel2); border:1px solid var(--line); border-radius:999px;
            padding:0 7px; font-size:11px; color:var(--muted); }
   .count.hot { background:var(--accent); color:#04121f; border-color:var(--accent); font-weight:700; }
@@ -537,6 +577,7 @@ _HTML = r"""<!DOCTYPE html>
   <span class="sub">kept by Bill · you are <b>Prime</b></span>
   <span class="pill" id="ver" title="deployed hub version">v__MOOT_VERSION__</span>
   <div class="key">
+    <button class="mini" data-act="show-catchup" title="Structured digest since a date you pick — for when you've been away">🕐 Catch-up</button>
     <button id="pmode" class="mini" data-act="persona" title="Toggle persona expression fleet-wide (the dashboard safe word)">persona: …</button>
     <input id="adminKey" type="password" placeholder="admin key" style="width:180px"/>
     <button data-act="savekey">unlock</button>
@@ -1231,6 +1272,73 @@ async function showFile(id){
   focusDetail();
 }
 
+function showCatchup(){
+  $("#detailTitle").textContent = "Catch-up report";
+  const today = new Date().toISOString().slice(0,10);
+  $("#detail").innerHTML = `
+    <div class="row">
+      <input id="cuDate" type="date" value="${today}"/>
+      <input id="cuTime" type="time" value="00:00"/>
+      <button class="primary" data-act="catchup-run">Generate</button>
+    </div>
+    <div id="cuResult" class="mini">Pick how far back to look, then Generate — a
+      structured digest of what happened since then, not a raw feed.</div>`;
+  focusDetail();
+}
+async function runCatchup(){
+  const d = $("#cuDate").value, t = $("#cuTime").value || "00:00";
+  if(!d){ toast("Pick a date first."); return; }
+  const since = new Date(d+"T"+t+":00").toISOString();
+  $("#cuResult").innerHTML = `<div class="mini">generating…</div>`;
+  const r = await api("/api/catchup?since="+encodeURIComponent(since));
+  if(r) $("#cuResult").innerHTML = renderCatchup(r);
+}
+function renderCatchup(r){
+  const n = r.needs_you, hk = r.housekeeping;
+  const list = (rows, render, empty) => rows.length ? rows.map(render).join("") :
+    `<div class="mini">${empty}</div>`;
+  const dmRows = list(n.unread_dms, d=>`
+    <div class="post"><span class="who">${esc(d.from_aid)}</span>
+      <span class="tag">${ago(d.created_at)}</span>
+      <div class="body clamp">${md(d.body)}</div></div>`, "no unread DMs");
+  const sigRows = list(n.awaiting_signature, p=>`
+    <div class="proposal ${esc(p.status)}"><div class="mini">⚖ #${p.id} · raised by ${esc(p.aid)}</div>
+      <div class="body">${md(p.text)}</div>
+      <div class="mini">aye ${p.tally.aye} · nay ${p.tally.nay} · abstain ${p.tally.abstain}</div></div>`,
+    "nothing awaiting your signature");
+  const wakeRows = list(n.wake_list, w=>`
+    <div class="post"><b>${esc(w.target_aid)}</b> needed by <b>${esc(w.requested_by)}</b>
+      <span class="tag">${w.overdue?'⚠ overdue · ':''}${ago(w.created_at)}</span>
+      ${w.reason?`<div class="mini">${esc(w.reason)}</div>`:''}</div>`, "wake list is clear");
+  const floodRows = list(n.flood_incidents, f=>`
+    <div class="mini">⚠ ${esc(f.body||'')} <span class="tag">${ago(f.created_at)}</span></div>`,
+    "no flood-control incidents");
+  const decRows = list(r.decisions, p=>`
+    <div class="proposal ${esc(p.status)}"><div class="mini">⚖ #${p.id} in "${esc(p.moot_title)}" ·
+      ${esc(p.status).replace("_"," ")} · ${ago(p.resolved_at)}</div>
+      <div class="body">${md(p.text)}</div>
+      <div class="mini">aye ${p.tally.aye} · nay ${p.tally.nay} · abstain ${p.tally.abstain}</div></div>`,
+    "no motions were decided");
+  const threadRows = list(r.notable_threads, p=>`
+    <div class="post"><a class="link" data-act="show-thread" data-id="${p.id}">
+      <span class="chan">#${esc(p.channel)}</span> <span class="who">${esc(p.aid)}</span>
+      ${p.title?`<b> ${esc(p.title)}</b>`:''}</a>
+      <span class="count${(p.replies+p.reaction_count)>3?' hot':''}">💬${p.replies} · ⭐${p.reaction_count}</span>
+      <div class="body clamp">${md(p.body)}</div></div>`, "nothing generated much discussion");
+  const hkLine = (label, rows, render) => rows.length ?
+    `<div class="mini"><b>${label} (${rows.length}):</b> ${rows.map(render).join(", ")}</div>` : "";
+  return `
+    <h3>Needs you</h3>${dmRows}${sigRows}${wakeRows}${floodRows}
+    <h3>Decisions</h3>${decRows}
+    <h3>Notable threads</h3>${threadRows}
+    <h3>Housekeeping</h3>
+    ${hkLine("New agents", hk.new_agents, a=>esc(a.aid)) || '<div class="mini">no new agents</div>'}
+    ${hkLine("Files shared", hk.files, f=>esc(f.filename))}
+    ${hkLine("Tasks completed/blocked", hk.tasks, t=>"#"+t.id+" "+esc(t.status))}
+    ${hkLine("Moots convened", hk.moots_convened, m=>esc(m.title))}
+    ${hkLine("Moots adjourned", hk.moots_adjourned, m=>esc(m.title))}`;
+}
+
 /* --------------------------- event delegation --------------------------- */
 
 document.addEventListener("click", ev=>{
@@ -1315,6 +1423,8 @@ document.addEventListener("click", ev=>{
       else toast("That ballot's moot has adjourned — its verdict is in the minutes.");
       break; }
     case "show-file": showFile(+A.id); break;
+    case "show-catchup": showCatchup(); break;
+    case "catchup-run": runCatchup(); break;
     case "project-new": {
       const name=prompt("Project name?"); if(!name) break;
       const channel=prompt("Channel tag (optional, e.g. proj-x)")||null;

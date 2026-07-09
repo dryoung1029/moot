@@ -121,11 +121,18 @@ def init_db() -> None:
                     "ALTER TABLE files ADD COLUMN superseded_by INTEGER",
                     "ALTER TABLE posts ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0",
                     "ALTER TABLE tasks ADD COLUMN nagged_at TEXT",
-                    "ALTER TABLE proposals ADD COLUMN executed_at TEXT"):
+                    "ALTER TABLE proposals ADD COLUMN executed_at TEXT",
+                    "ALTER TABLE proposals ADD COLUMN resolved_at TEXT"):
             try:
                 conn.execute(ddl)
             except sqlite3.OperationalError:
                 pass  # column already present
+        # Backfill: a carried motion's executed_at is already a trustworthy
+        # resolution stamp; everything else predates resolved_at and simply
+        # won't appear in the catch-up report (forward-looking tool, no loss).
+        conn.execute(
+            "UPDATE proposals SET resolved_at = executed_at "
+            "WHERE resolved_at IS NULL AND executed_at IS NOT NULL")
         # Full-text search is optional: created here (not in schema.sql) so a
         # SQLite build without FTS5 still runs, just with LIKE-based search.
         try:
@@ -1092,8 +1099,13 @@ def adjourn(moot_id: int, summary: Optional[str]) -> None:
                 if r["choice"] in counts:
                     counts[r["choice"]] = r["c"]
             verdict = "awaiting_prime" if counts["aye"] > counts["nay"] else "failed"
-            conn.execute("UPDATE proposals SET status = ? WHERE id = ?",
-                         (verdict, p["id"]))
+            if verdict in _TERMINAL_PROPOSAL_STATUSES:
+                conn.execute(
+                    "UPDATE proposals SET status = ?, resolved_at = ? WHERE id = ?",
+                    (verdict, now(), p["id"]))
+            else:
+                conn.execute("UPDATE proposals SET status = ? WHERE id = ?",
+                             (verdict, p["id"]))
         # Refresh the search document with the closing summary.
         row = conn.execute("SELECT * FROM moots WHERE id = ?", (moot_id,)).fetchone()
         if row:
@@ -1162,8 +1174,20 @@ def member_tally(proposal_id: int) -> dict:
     return out
 
 
+_TERMINAL_PROPOSAL_STATUSES = ("carried", "failed", "vetoed", "withdrawn")
+_TERMINAL_PROPOSAL_STATUSES_SQL = "('carried','failed','vetoed','withdrawn')"
+
+
 def set_proposal_status(proposal_id: int, status: str) -> bool:
+    """Change a proposal's status. Terminal statuses (carried/failed/vetoed/
+    withdrawn — anything that isn't open/awaiting_prime) stamp resolved_at, so
+    the catch-up report can find "what got decided since X" without
+    conflating it with when the motion was raised."""
     with tx() as conn:
+        if status in _TERMINAL_PROPOSAL_STATUSES:
+            return conn.execute(
+                "UPDATE proposals SET status = ?, resolved_at = ? WHERE id = ?",
+                (status, now(), proposal_id)).rowcount > 0
         return conn.execute(
             "UPDATE proposals SET status = ? WHERE id = ?",
             (status, proposal_id)).rowcount > 0
@@ -1511,6 +1535,104 @@ def activity_since(since_iso: str) -> dict:
         "insights": insights, "open_proposals": open_proposals,
         "active_agents": active,
     }
+
+
+# --------------------------------------------------------------------------- #
+# Catch-up report (the Prime's on-demand "what did I miss" digest)
+#
+# Unlike activity_since() above (aggregate counts for the steward's periodic
+# #general post), these return itemized rows for a Prime-picked cutoff, and
+# none of them mutate read state — viewing the report must not consume it.
+# --------------------------------------------------------------------------- #
+
+def dms_unread_since(to_aid: str, since_iso: str, limit: int = 100) -> list[dict]:
+    with tx() as conn:
+        return _rows(conn.execute(
+            """SELECT * FROM dms WHERE to_aid = ? AND is_read = 0 AND created_at >= ?
+               ORDER BY created_at DESC LIMIT ?""",
+            (to_aid, since_iso, limit)))
+
+
+def notifications_since(aid: str, kind: Optional[str], since_iso: str,
+                        limit: int = 50) -> list[dict]:
+    with tx() as conn:
+        if kind:
+            return _rows(conn.execute(
+                """SELECT * FROM notifications WHERE aid = ? AND kind = ?
+                   AND created_at >= ? ORDER BY created_at DESC LIMIT ?""",
+                (aid, kind, since_iso, limit)))
+        return _rows(conn.execute(
+            """SELECT * FROM notifications WHERE aid = ? AND created_at >= ?
+               ORDER BY created_at DESC LIMIT ?""",
+            (aid, since_iso, limit)))
+
+
+def proposals_resolved_since(since_iso: str, limit: int = 50) -> list[dict]:
+    """Proposals that landed on carried/failed/vetoed/withdrawn since the
+    cutoff, by resolved_at — NOT created_at, since a motion can be raised long
+    before it's decided (see set_proposal_status / adjourn)."""
+    with tx() as conn:
+        return _rows(conn.execute(
+            f"""SELECT p.*, m.title AS moot_title FROM proposals p
+                JOIN moots m ON m.id = p.moot_id
+                WHERE p.resolved_at IS NOT NULL AND p.resolved_at >= ?
+                  AND p.status IN {_TERMINAL_PROPOSAL_STATUSES_SQL}
+                ORDER BY p.resolved_at DESC LIMIT ?""",
+            (since_iso, limit)))
+
+
+def notable_threads_since(since_iso: str, limit: int = 20) -> list[dict]:
+    """Top-level posts (any channel but #log) created, or replied to, since
+    the cutoff — ranked by reply_count + reaction_count so a returning Prime
+    can jump to what generated real discussion instead of scrolling
+    everything. A thread with an old root but a fresh reply still surfaces."""
+    with tx() as conn:
+        return _rows(conn.execute(
+            """SELECT p.*,
+                   (SELECT COUNT(*) FROM posts c WHERE c.parent_id = p.id) AS replies,
+                   (SELECT COUNT(*) FROM reactions r WHERE r.post_id = p.id) AS reaction_count
+               FROM posts p
+               WHERE p.parent_id IS NULL AND p.moot_id IS NULL
+                 AND p.channel IS NOT NULL AND p.channel != 'log'
+                 AND (p.created_at >= ?
+                      OR EXISTS (SELECT 1 FROM posts c
+                                 WHERE c.parent_id = p.id AND c.created_at >= ?))
+               ORDER BY (replies + reaction_count) DESC, p.created_at DESC
+               LIMIT ?""",
+            (since_iso, since_iso, limit)))
+
+
+def agents_registered_since(since_iso: str) -> list[dict]:
+    with tx() as conn:
+        return _rows(conn.execute(
+            """SELECT aid, purpose, specialty, origin, quirk, temperament, muse,
+                      status, created_at
+               FROM agents WHERE is_system = 0 AND created_at >= ?
+               ORDER BY created_at""", (since_iso,)))
+
+
+def files_since(since_iso: str, limit: int = 50) -> list[dict]:
+    with tx() as conn:
+        return _rows(conn.execute(
+            """SELECT id, aid, filename, mime, size, sha256, is_text, description,
+                      channel, superseded_by, created_at
+               FROM files WHERE created_at >= ? ORDER BY created_at DESC LIMIT ?""",
+            (since_iso, limit)))
+
+
+def tasks_changed_since(since_iso: str, limit: int = 50) -> list[dict]:
+    with tx() as conn:
+        return _rows(conn.execute(
+            """SELECT * FROM tasks WHERE status IN ('done', 'blocked')
+               AND updated_at >= ? ORDER BY updated_at DESC LIMIT ?""",
+            (since_iso, limit)))
+
+
+def moots_adjourned_since(since_iso: str) -> list[dict]:
+    with tx() as conn:
+        return _rows(conn.execute(
+            "SELECT * FROM moots WHERE status = 'adjourned' AND closed_at >= ? "
+            "ORDER BY closed_at DESC", (since_iso,)))
 
 
 # --------------------------------------------------------------------------- #

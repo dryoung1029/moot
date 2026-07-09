@@ -174,6 +174,7 @@ CREATE TABLE IF NOT EXISTS proposals (
     -- | carried (signed into effect) | failed | vetoed | withdrawn
     status       TEXT NOT NULL DEFAULT 'open',
     executed_at  TEXT,                          -- when the keeper realized a carried motion
+    resolved_at  TEXT,                          -- when status left open/awaiting_prime for good
     created_at   TEXT NOT NULL
 );
 
