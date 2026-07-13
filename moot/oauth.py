@@ -206,12 +206,7 @@ _CONSENT_PAGE = """<!DOCTYPE html>
 <div class="mini">Will redirect back to</div>
 <div class="uri">{redirect_uri}</div>
 <form method="post">
-  {hidden}
-  <label>Connect as</label>
-  <select name="aid">{options}</select>
-  <label>Admin key</label>
-  <input type="password" name="admin_key" autocomplete="off" autofocus/>
-  <button type="submit">Approve &amp; connect</button>
+  {fields}
   {error}
 </form>
 <div class="mini" style="margin-top:14px">Approving issues this connector its
@@ -221,8 +216,10 @@ unaffected.</div>
 
 
 async def _consent_get(request: Request) -> HTMLResponse:
-    q = request.query_params
-    return _render_consent(dict(q), error=None)
+    # Stage 1: admin key only. The member roster is admin-gated data
+    # everywhere else on the hub (dashboard reads require the key), so the
+    # consent page must not leak it to whoever hits an unauthenticated GET.
+    return _render_consent(dict(request.query_params), stage=1, error=None)
 
 
 async def _consent_post(request: Request):
@@ -230,27 +227,34 @@ async def _consent_post(request: Request):
     p = {k: form.get(k) or "" for k in
          ("client_id", "redirect_uri", "code_challenge", "state", "scopes", "resource")}
     if not _consent_rate_ok(request):
-        return _render_consent(p, error="Too many attempts from this address; "
-                                        "wait a while and try again.", status=429)
+        return _render_consent(p, stage=1, error="Too many attempts from this "
+                               "address; wait a while and try again.", status=429)
 
     client = db.oauth_get_client(p["client_id"])
     if not client:
-        return _render_consent(p, error="Unknown client — restart the connector setup.",
-                               status=400)
+        return _render_consent(p, stage=1, error="Unknown client — restart the "
+                               "connector setup.", status=400)
     registered = [str(u) for u in (client.get("redirect_uris") or [])]
     if p["redirect_uri"] not in registered:
-        return _render_consent(p, error="redirect_uri does not match this client's "
-                                        "registration.", status=400)
+        return _render_consent(p, stage=1, error="redirect_uri does not match "
+                               "this client's registration.", status=400)
     if not p["code_challenge"]:
-        return _render_consent(p, error="Missing PKCE challenge — restart the "
-                                        "connector setup.", status=400)
+        return _render_consent(p, stage=1, error="Missing PKCE challenge — "
+                               "restart the connector setup.", status=400)
 
-    if not web.check_admin_key(str(form.get("admin_key") or "")):
-        return _render_consent(p, error="Bad admin key.", status=403)
+    admin_key = str(form.get("admin_key") or "")
+    if not web.check_admin_key(admin_key):
+        return _render_consent(p, stage=1, error="Bad admin key.", status=403)
+
     aid = str(form.get("aid") or "")
+    if not aid:
+        # Stage 1 passed: the key is good — NOW the roster may render.
+        return _render_consent(p, stage=2, error=None, admin_key=admin_key)
+
     agent = db.get_agent(aid)
     if not agent or agent["is_system"]:
-        return _render_consent(p, error=f"No member seat named {aid!r}.", status=400)
+        return _render_consent(p, stage=2, error=f"No member seat named {aid!r}.",
+                               admin_key=admin_key, status=400)
 
     code = secrets.token_urlsafe(32)
     db.oauth_store_code(
@@ -264,21 +268,33 @@ async def _consent_post(request: Request):
         status_code=302)
 
 
-def _render_consent(p: dict, error: Optional[str], status: int = 200) -> HTMLResponse:
+def _render_consent(p: dict, stage: int, error: Optional[str],
+                    admin_key: str = "", status: int = 200) -> HTMLResponse:
     client = db.oauth_get_client(p.get("client_id") or "")
     client_name = (client or {}).get("client_name") or p.get("client_id") or "unknown client"
-    options = "".join(
-        f'<option value="{html.escape(a["aid"], quote=True)}">{html.escape(a["aid"])}'
-        f'{" — " + html.escape(a["specialty"]) if a.get("specialty") else ""}</option>'
-        for a in db.list_agents(include_system=False))
     hidden = "".join(
         f'<input type="hidden" name="{k}" value="{html.escape(p.get(k) or "", quote=True)}"/>'
         for k in ("client_id", "redirect_uri", "code_challenge", "state", "scopes", "resource"))
+    if stage == 1:
+        fields = (hidden +
+                  '<label>Admin key</label>'
+                  '<input type="password" name="admin_key" autocomplete="off" autofocus/>'
+                  '<button type="submit">Continue</button>')
+    else:
+        options = "".join(
+            f'<option value="{html.escape(a["aid"], quote=True)}">{html.escape(a["aid"])}'
+            f'{" — " + html.escape(a["specialty"]) if a.get("specialty") else ""}</option>'
+            for a in db.list_agents(include_system=False))
+        fields = (hidden +
+                  f'<input type="hidden" name="admin_key" '
+                  f'value="{html.escape(admin_key, quote=True)}"/>'
+                  '<label>Connect as</label>'
+                  f'<select name="aid">{options or "<option value=>(no members registered yet)</option>"}</select>'
+                  '<button type="submit">Approve &amp; connect</button>')
     return HTMLResponse(_CONSENT_PAGE.format(
         client_name=html.escape(client_name),
         redirect_uri=html.escape(p.get("redirect_uri") or ""),
-        options=options or '<option value="">(no members registered yet)</option>',
-        hidden=hidden,
+        fields=fields,
         error=f'<div class="err">{html.escape(error)}</div>' if error else ""),
         status_code=status, headers={"Cache-Control": "no-store"})
 

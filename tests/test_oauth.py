@@ -125,6 +125,17 @@ class TestOAuthGrantLifecycle(unittest.TestCase):
         db.revoke_agent("Codex")
         self.assertIsNone(db.oauth_get_token_row("A1", "access"))
 
+    def test_rename_agent_carries_grants_to_the_new_name(self):
+        # rename_agent rewrites every AId reference via _AID_REFS — the OAuth
+        # tables must be on that list or a renamed agent's connector locks out
+        # (its grant rows would point at a name that no longer exists).
+        db.oauth_redeem_code_for_tokens(code=self._code(), access_token="A1",
+                                        refresh_token="R1",
+                                        access_ttl_seconds=3600, refresh_ttl_seconds=None)
+        self.assertTrue(db.rename_agent("Codex", "Codex2"))
+        self.assertEqual(db.oauth_get_token_row("A1", "access")["aid"], "Codex2")
+        self.assertEqual(db.get_agent_by_any_token("A1")["aid"], "Codex2")
+
     def test_static_token_reissue_leaves_grants_alone(self):
         # Deliberate: the two credential families are independent — rotating a
         # leaked static token must not silently break a working connector.
@@ -248,14 +259,24 @@ class TestLiveOAuthFlow(unittest.TestCase):
         self.assertIn(r.status_code, (302, 307))
         consent_url = r.headers["location"]
         self.assertIn("/oauth/consent", consent_url)
-        self.assertEqual(c.get(consent_url).status_code, 200)
+        page1 = c.get(consent_url)
+        self.assertEqual(page1.status_code, 200)
+        # Stage 1 must NOT leak the roster: member names are admin-gated
+        # everywhere else on the hub, and this page is reachable by anyone.
+        self.assertNotIn("Codex", page1.text)
 
-        # 4. Consent: wrong admin key refused; right key mints the code.
+        # 4. Consent: wrong admin key refused; the roster renders only after
+        # the key validates; then picking a seat mints the code.
         from urllib.parse import parse_qs, urlparse
         q = {k: v[0] for k, v in parse_qs(urlparse(consent_url).query).items()}
         bad = c.post(self.base + "/oauth/consent",
                      data={**q, "aid": "Codex", "admin_key": "wrong"})
         self.assertEqual(bad.status_code, 403)
+        self.assertNotIn("<select", bad.text)  # failed key never shows seats
+        page2 = c.post(self.base + "/oauth/consent",
+                       data={**q, "admin_key": "testkey"})
+        self.assertEqual(page2.status_code, 200)
+        self.assertIn("Codex", page2.text)     # unlocked: roster visible now
         ok = c.post(self.base + "/oauth/consent",
                     data={**q, "aid": "Codex", "admin_key": "testkey"})
         self.assertEqual(ok.status_code, 302)
