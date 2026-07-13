@@ -26,7 +26,7 @@ def _agent_for(request: Request, touch: bool = True) -> Optional[dict]:
     token = parts[1] if len(parts) == 2 and parts[0].lower() == "bearer" else auth.strip()
     if not token:
         return None
-    agent = db.get_agent_by_token(token)
+    agent = db.get_agent_by_any_token(token)
     if agent and touch:
         db.touch(agent["aid"])
     return agent

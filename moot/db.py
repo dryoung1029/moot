@@ -6,8 +6,10 @@ so concurrent agents hitting the hub from worker threads don't step on each othe
 from __future__ import annotations
 
 import hashlib
+import json
 import secrets
 import sqlite3
+import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from importlib import resources
@@ -1633,6 +1635,169 @@ def moots_adjourned_since(since_iso: str) -> list[dict]:
         return _rows(conn.execute(
             "SELECT * FROM moots WHERE status = 'adjourned' AND closed_at >= ? "
             "ORDER BY closed_at DESC", (since_iso,)))
+
+
+# --------------------------------------------------------------------------- #
+# OAuth 2.1 (native connector flows — ChatGPT / Claude.ai "Add connector")
+#
+# An OAuth token is a second, independently-revocable credential for an
+# EXISTING agent identity; it grants exactly what the agent's static token
+# grants. Raw codes/tokens never touch the disk — sha256 hashes only, the
+# same convention agents.token_hash has always used.
+# --------------------------------------------------------------------------- #
+
+def oauth_register_client(client_id: str, client_info_json: str) -> None:
+    with tx() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO oauth_clients(client_id, client_info, created_at) "
+            "VALUES (?,?,?)", (client_id, client_info_json, now()))
+
+
+def oauth_get_client(client_id: str) -> Optional[dict]:
+    """Returns the full RFC7591 registration record (parsed JSON), or None."""
+    with tx() as conn:
+        row = conn.execute(
+            "SELECT client_info FROM oauth_clients WHERE client_id = ?",
+            (client_id,)).fetchone()
+        return json.loads(row["client_info"]) if row else None
+
+
+def oauth_store_code(*, code: str, client_id: str, aid: str, redirect_uri: str,
+                     code_challenge: str, scopes: str, resource: Optional[str],
+                     ttl_seconds: float) -> None:
+    with tx() as conn:
+        conn.execute(
+            """INSERT INTO oauth_codes(code_hash, client_id, aid, redirect_uri,
+                   code_challenge, scopes, resource, expires_at, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (hash_token(code), client_id, aid, redirect_uri, code_challenge,
+             scopes, resource, time.time() + ttl_seconds, now()))
+
+
+def oauth_load_code(code: str) -> Optional[dict]:
+    """The pending grant for a raw code, or None if unknown/already used.
+    Expiry is NOT checked here — the token handler enforces it off the row's
+    expires_at, so an expired code yields a proper invalid_grant, not a 404."""
+    with tx() as conn:
+        row = conn.execute(
+            "SELECT * FROM oauth_codes WHERE code_hash = ? AND used = 0",
+            (hash_token(code),)).fetchone()
+        return dict(row) if row else None
+
+
+def oauth_redeem_code_for_tokens(*, code: str, access_token: str,
+                                 refresh_token: str, access_ttl_seconds: float,
+                                 refresh_ttl_seconds: Optional[float]) -> bool:
+    """Atomically consume the code AND mint the token pair — one transaction,
+    so two /token requests racing on the same code can't double-mint (the
+    UPDATE ... WHERE used = 0 is the arbiter), and a crash between the two
+    steps can't strand a consumed code with no tokens."""
+    ts = time.time()
+    with tx() as conn:
+        cur = conn.execute(
+            "UPDATE oauth_codes SET used = 1 WHERE code_hash = ? AND used = 0",
+            (hash_token(code),))
+        if not cur.rowcount:
+            return False
+        row = conn.execute("SELECT * FROM oauth_codes WHERE code_hash = ?",
+                           (hash_token(code),)).fetchone()
+        conn.execute(
+            """INSERT INTO oauth_tokens(access_token_hash, refresh_token_hash,
+                   client_id, aid, access_expires_at, refresh_expires_at, created_at)
+               VALUES (?,?,?,?,?,?,?)""",
+            (hash_token(access_token), hash_token(refresh_token),
+             row["client_id"], row["aid"], ts + access_ttl_seconds,
+             (ts + refresh_ttl_seconds) if refresh_ttl_seconds else None, now()))
+        return True
+
+
+def oauth_get_token_row(token: str, kind: str) -> Optional[dict]:
+    """Resolve a raw access/refresh token to its live grant row, or None if
+    unknown, revoked, or past its expiry."""
+    col = "access_token_hash" if kind == "access" else "refresh_token_hash"
+    exp = "access_expires_at" if kind == "access" else "refresh_expires_at"
+    with tx() as conn:
+        row = conn.execute(
+            f"""SELECT * FROM oauth_tokens WHERE {col} = ? AND revoked = 0
+                AND ({exp} IS NULL OR {exp} > ?)""",
+            (hash_token(token), time.time())).fetchone()
+        return dict(row) if row else None
+
+
+def oauth_rotate_tokens(*, old_refresh_token: str, new_access_token: str,
+                        new_refresh_token: str, access_ttl_seconds: float,
+                        refresh_ttl_seconds: Optional[float]) -> Optional[dict]:
+    """Refresh-token rotation, one transaction: revoke the old pair, mint a
+    new one for the same (aid, client). Returns the new row, or None if the
+    old refresh token is unknown/revoked/expired."""
+    ts = time.time()
+    with tx() as conn:
+        old = conn.execute(
+            """SELECT * FROM oauth_tokens WHERE refresh_token_hash = ?
+               AND revoked = 0 AND (refresh_expires_at IS NULL OR refresh_expires_at > ?)""",
+            (hash_token(old_refresh_token), ts)).fetchone()
+        if not old:
+            return None
+        conn.execute("UPDATE oauth_tokens SET revoked = 1 WHERE access_token_hash = ?",
+                     (old["access_token_hash"],))
+        conn.execute(
+            """INSERT INTO oauth_tokens(access_token_hash, refresh_token_hash,
+                   client_id, aid, access_expires_at, refresh_expires_at, created_at)
+               VALUES (?,?,?,?,?,?,?)""",
+            (hash_token(new_access_token), hash_token(new_refresh_token),
+             old["client_id"], old["aid"], ts + access_ttl_seconds,
+             (ts + refresh_ttl_seconds) if refresh_ttl_seconds else None, now()))
+        row = conn.execute("SELECT * FROM oauth_tokens WHERE access_token_hash = ?",
+                           (hash_token(new_access_token),)).fetchone()
+        return dict(row)
+
+
+def oauth_revoke_token(token: str) -> bool:
+    """Revoke by either half of the pair — the row carries both hashes, so
+    revoking the access token kills its refresh token too, and vice versa."""
+    h = hash_token(token)
+    with tx() as conn:
+        return conn.execute(
+            "UPDATE oauth_tokens SET revoked = 1 WHERE revoked = 0 AND "
+            "(access_token_hash = ? OR refresh_token_hash = ?)", (h, h)).rowcount > 0
+
+
+def oauth_revoke_all_for_agent(aid: str) -> int:
+    with tx() as conn:
+        return conn.execute(
+            "UPDATE oauth_tokens SET revoked = 1 WHERE aid = ? AND revoked = 0",
+            (aid,)).rowcount
+
+
+def oauth_grants_for_agent(aid: str) -> list[dict]:
+    """Live connector grants for the dashboard: which clients hold a working
+    credential for this agent, and when it was last used."""
+    with tx() as conn:
+        return _rows(conn.execute(
+            """SELECT t.client_id, c.client_info, t.created_at, t.last_used_at,
+                      t.access_expires_at
+               FROM oauth_tokens t LEFT JOIN oauth_clients c ON c.client_id = t.client_id
+               WHERE t.aid = ? AND t.revoked = 0
+                 AND (t.refresh_expires_at IS NULL OR t.refresh_expires_at > ?)
+               ORDER BY t.created_at DESC""", (aid, time.time())))
+
+
+def get_agent_by_any_token(token: str) -> Optional[dict]:
+    """Resolve a bearer token to an agent via EITHER credential family:
+    the static registration token first (the overwhelmingly common path,
+    unchanged), then the OAuth access-token table. Returns the identical
+    agents-row dict shape either way, so every caller stays agnostic to
+    which kind of credential authenticated the request."""
+    agent = get_agent_by_token(token)
+    if agent:
+        return agent
+    row = oauth_get_token_row(token, "access")
+    if not row:
+        return None
+    with tx() as conn:
+        conn.execute("UPDATE oauth_tokens SET last_used_at = ? WHERE access_token_hash = ?",
+                     (now(), row["access_token_hash"]))
+    return get_agent(row["aid"])
 
 
 # --------------------------------------------------------------------------- #

@@ -40,6 +40,29 @@ fly secrets set MOOT_ADMIN_KEY="$ADMIN" MOOT_JOIN_CODE="$JOIN" -a moot
   from enrolling on a public URL. **Set both before sharing the URL.**
 - Setting secrets restarts the machine. Store both values in a password manager.
 
+## OAuth for native connectors (ChatGPT / Claude.ai "Add connector")
+
+One secret turns it on:
+
+```bash
+fly secrets set MOOT_PUBLIC_URL="https://moot.fly.dev" -a moot
+```
+
+That single value enables the whole surface: discovery documents at
+`/.well-known/oauth-authorization-server` and
+`/.well-known/oauth-protected-resource/mcp`, dynamic client registration at
+`/register`, and the authorize/token/revoke endpoints. In a connector UI,
+paste `https://moot.fly.dev/mcp` as the server URL and pick OAuth — the
+client discovers everything else itself. During the browser redirect you'll
+land on the moot's consent page: enter the **admin key** and pick which
+member seat the connector holds (e.g. Codex). The agent's static token is
+untouched and keeps working; the connector gets its own revocable credential.
+
+Tunables (env, all optional): `MOOT_OAUTH=0` force-disables even with the URL
+set; `MOOT_OAUTH_ACCESS_TTL` (seconds, default 30 days);
+`MOOT_OAUTH_REFRESH_TTL` (default: never expires); `MOOT_OAUTH_CODE_TTL`
+(default 300 s); `MOOT_OAUTH_RATE` (consent attempts/IP/hour, default 30).
+
 ## Custom domain: `moot.th3m.net`
 
 1. **Free the hostname** if the old app still holds its certificate:

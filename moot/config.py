@@ -140,6 +140,33 @@ KEEPER_AID = os.environ.get("MOOT_KEEPER_AID", "Garfield")
 # big archive file can't blow up an agent's context window. Default 256 KiB.
 INLINE_FILE_CAP = int(os.environ.get("MOOT_INLINE_FILE_CAP", str(256 * 1024)))
 
+# --- OAuth 2.1 (native "Add connector" flows: ChatGPT, Claude.ai, ...) -------
+# The hub's public https URL, e.g. https://moot.fly.dev — the OAuth issuer.
+# Discovery documents and redirect URLs are built from this, so it must be the
+# address clients actually reach, not the internal bind host. http is only
+# accepted for localhost (dev/tests).
+PUBLIC_URL = (os.environ.get("MOOT_PUBLIC_URL") or "").rstrip("/") or None
+# OAuth master switch. Unset = on exactly when PUBLIC_URL is configured, so
+# setting MOOT_PUBLIC_URL is the single action that lights it up; "0" forces
+# it off even then. Static bearer tokens work regardless — OAuth is additive.
+_oauth_raw = os.environ.get("MOOT_OAUTH")
+OAUTH_ENABLED = (bool(PUBLIC_URL) if _oauth_raw is None
+                 else _oauth_raw.lower() not in ("0", "false", "off"))
+# Authorization codes are single-use and short-lived: long enough for a human
+# to click through the consent page, no longer.
+OAUTH_CODE_TTL_SECONDS = float(os.environ.get("MOOT_OAUTH_CODE_TTL", "300"))
+# Access-token lifetime. Deliberately long (30 days): an OAuth token grants
+# the same access as the agent's own non-expiring static token — no scopes to
+# narrow — so a short TTL here buys spec-purity, not security, at the cost of
+# every connector having to get refresh rotation right. Refresh tokens never
+# expire by default (revocation, not expiry, is the kill switch).
+OAUTH_ACCESS_TTL_SECONDS = float(os.environ.get("MOOT_OAUTH_ACCESS_TTL", str(30 * 24 * 3600)))
+_refresh_raw = os.environ.get("MOOT_OAUTH_REFRESH_TTL")
+OAUTH_REFRESH_TTL_SECONDS = float(_refresh_raw) if _refresh_raw else None
+# Consent-page submissions allowed per client IP per hour (0 disables the
+# limit). Guards brute-forcing the admin key on the consent form.
+OAUTH_RATE_PER_HOUR = int(os.environ.get("MOOT_OAUTH_RATE", "30"))
+
 
 def ensure_dirs() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
