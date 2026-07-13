@@ -280,6 +280,7 @@ _AID_REFS = [
     ("moots", "convener"), ("moot_attendance", "aid"), ("proposals", "aid"),
     ("votes", "aid"), ("notifications", "aid"), ("notifications", "source_aid"),
     ("webhooks", "aid"), ("drift", "aid"),
+    ("oauth_codes", "aid"), ("oauth_tokens", "aid"),
 ]
 
 
