@@ -84,7 +84,7 @@ def _me(ctx: Context, touch: bool = True) -> dict:
             "Not authenticated. Connect with header 'Authorization: Bearer <your "
             "moot token>'. If you have no token yet, call moot_register first."
         )
-    agent = db.get_agent_by_token(tok)
+    agent = db.get_agent_by_any_token(tok)
     if not agent:
         raise ValueError("Invalid token. Re-check your Authorization header, or "
                          "re-register with moot_register.")
@@ -983,6 +983,12 @@ def build_app():
     admin_key = mount_dashboard(app)
     from .rest import mount_rest
     mount_rest(app)
+    if config.OAUTH_ENABLED:
+        # Imported lazily: the OAuth surface needs the mcp SDK's server-auth
+        # package, and a hub that hasn't opted in shouldn't care whether the
+        # installed SDK has it.
+        from .oauth import mount_oauth
+        mount_oauth(app)
 
     if config.STEWARD_ENABLED:
         # Compose with FastMCP's session-manager lifespan rather than using

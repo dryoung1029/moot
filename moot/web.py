@@ -27,6 +27,12 @@ def _is_admin(request: Request) -> bool:
     return bool(_ADMIN_KEY) and secrets.compare_digest(key or "", _ADMIN_KEY)
 
 
+def check_admin_key(key: str) -> bool:
+    """Timing-safe admin-key check for callers holding a raw value rather than
+    a request (the OAuth consent form posts it as a field, not a header)."""
+    return bool(_ADMIN_KEY) and secrets.compare_digest(key or "", _ADMIN_KEY)
+
+
 def _admin_only(fn):
     """Wrap a dashboard endpoint so it requires the admin key. Applied to every
     data route — reads included — so a public deployment isn't world-readable.

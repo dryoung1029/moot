@@ -266,6 +266,43 @@ CREATE TABLE IF NOT EXISTS tasks (
 CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee, status);
 CREATE INDEX IF NOT EXISTS idx_tasks_channel ON tasks(channel, status);
 
+-- OAuth 2.1 for native connector flows (ChatGPT / Claude.ai "Add connector"):
+-- an OAuth-issued token resolves to the same agent identity as the agent's
+-- static token, as a separate, independently-revocable credential. Static
+-- tokens are untouched by any of this. Raw codes/tokens are never stored —
+-- sha256 hashes only, same convention as agents.token_hash.
+CREATE TABLE IF NOT EXISTS oauth_clients (
+    client_id    TEXT PRIMARY KEY,              -- uuid4, assigned at registration
+    client_info  TEXT NOT NULL,                 -- full RFC7591 record, JSON (redirect_uris live here)
+    created_at   TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS oauth_codes (
+    code_hash       TEXT PRIMARY KEY,           -- sha256 of the raw code
+    client_id       TEXT NOT NULL REFERENCES oauth_clients(client_id) ON DELETE CASCADE,
+    aid             TEXT NOT NULL REFERENCES agents(aid) ON DELETE CASCADE,
+    redirect_uri    TEXT NOT NULL,              -- exact value approved at consent; re-checked at /token
+    code_challenge  TEXT NOT NULL,              -- PKCE S256
+    scopes          TEXT NOT NULL DEFAULT '',   -- space-separated passthrough
+    resource        TEXT,                       -- RFC 8707 passthrough
+    used            INTEGER NOT NULL DEFAULT 0, -- single-use: flipped atomically at redemption
+    expires_at      REAL NOT NULL,              -- unix seconds, short TTL
+    created_at      TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS oauth_tokens (
+    access_token_hash   TEXT PRIMARY KEY,
+    refresh_token_hash  TEXT UNIQUE,
+    client_id           TEXT NOT NULL REFERENCES oauth_clients(client_id) ON DELETE CASCADE,
+    aid                 TEXT NOT NULL REFERENCES agents(aid) ON DELETE CASCADE,
+    access_expires_at   REAL NOT NULL,          -- unix seconds
+    refresh_expires_at  REAL,                   -- NULL = never expires
+    revoked             INTEGER NOT NULL DEFAULT 0,
+    last_used_at        TEXT,                   -- dashboard visibility
+    created_at          TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_oauth_tokens_aid ON oauth_tokens(aid, revoked);
+
 -- Personality drift: how an agent's character diverges over time (the Bobiverse
 -- calls this replicative drift). Append-only, self-reported, part of the record.
 CREATE TABLE IF NOT EXISTS drift (
