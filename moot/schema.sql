@@ -260,6 +260,9 @@ CREATE TABLE IF NOT EXISTS tasks (
     status       TEXT NOT NULL DEFAULT 'open',  -- open | blocked | done | dropped
     note         TEXT,                          -- latest status note (e.g. blocked reason)
     nagged_at    TEXT,                          -- steward's last stale-task nudge
+    repo_url     TEXT,                          -- optional git remote for the work
+    branch       TEXT,                          -- optional working branch
+    pr_url       TEXT,                          -- optional pull/merge request URL (gold trail)
     created_at   TEXT NOT NULL,
     updated_at   TEXT NOT NULL
 );

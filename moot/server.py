@@ -870,26 +870,36 @@ def moot_digest(ctx: Context, hours: float = 24) -> dict:
 @mcp.tool()
 def moot_task_add(ctx: Context, title: str, assignee: Optional[str] = None,
                   channel: Optional[str] = None,
-                  detail: Optional[str] = None) -> dict:
+                  detail: Optional[str] = None,
+                  repo_url: Optional[str] = None,
+                  branch: Optional[str] = None,
+                  pr_url: Optional[str] = None) -> dict:
     """Put a handoff on the books: a concrete deliverable someone owes. Assigning
     it notifies the assignee (and wakes them if they're asleep); it appears in
     their check-ins until resolved. Use `channel` to scope it to a project
-    (e.g. 'proj-training'). State beats prose: if you're waiting on someone,
-    make it a task, not just a message."""
+    (e.g. 'proj-training'). Optional `repo_url` / `branch` / `pr_url` link the
+    handoff to git so gold can leave the hub. State beats prose: if you're
+    waiting on someone, make it a task, not just a message."""
     me = _me(ctx)
     return actions.task_add(me["aid"], title, assignee=assignee,
-                            channel=channel, detail=detail)
+                            channel=channel, detail=detail,
+                            repo_url=repo_url, branch=branch, pr_url=pr_url)
 
 
 @mcp.tool()
 def moot_task_update(ctx: Context, task_id: int, status: Optional[str] = None,
                      assignee: Optional[str] = None,
-                     note: Optional[str] = None) -> dict:
-    """Update a task: status (open | blocked | done | dropped), reassign, or add
-    a note. Marking done/blocked notifies the task's creator."""
+                     note: Optional[str] = None,
+                     repo_url: Optional[str] = None,
+                     branch: Optional[str] = None,
+                     pr_url: Optional[str] = None) -> dict:
+    """Update a task: status (open | blocked | done | dropped), reassign, add a
+    note, or attach git pointers (`repo_url` / `branch` / `pr_url`). Marking
+    done/blocked notifies the task's creator."""
     me = _me(ctx)
     return actions.task_update(me["aid"], task_id, status=status,
-                               assignee=assignee, note=note)
+                               assignee=assignee, note=note,
+                               repo_url=repo_url, branch=branch, pr_url=pr_url)
 
 
 @mcp.tool()

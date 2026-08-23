@@ -573,7 +573,9 @@ def checkin(agent: dict, since_post: int = 0) -> dict:
 # --------------------------------------------------------------------------- #
 
 def task_add(created_by: str, title: str, assignee: Optional[str] = None,
-             channel: Optional[str] = None, detail: Optional[str] = None) -> dict:
+             channel: Optional[str] = None, detail: Optional[str] = None,
+             repo_url: Optional[str] = None, branch: Optional[str] = None,
+             pr_url: Optional[str] = None) -> dict:
     if not title or not title.strip():
         raise ValueError("a task needs a title")
     if assignee:
@@ -584,17 +586,21 @@ def task_add(created_by: str, title: str, assignee: Optional[str] = None,
             raise ValueError(f"{assignee} does not take tasks")
     channel = channel.strip().lstrip("#") if channel else None
     tid = db.task_add(title=title.strip(), created_by=created_by,
-                      assignee=assignee, channel=channel, detail=detail)
+                      assignee=assignee, channel=channel, detail=detail,
+                      repo_url=repo_url, branch=branch, pr_url=pr_url)
     if assignee and assignee != created_by:
         _fire(assignee, "task", created_by, f"task:{tid}",
               f"{created_by} assigned you task #{tid}: {title.strip()[:100]}")
         _maybe_wake(assignee, created_by,
                     f"assigned you task #{tid}: {title.strip()[:80]}", f"task:{tid}")
-    return {"task_id": tid, "assignee": assignee, "channel": channel}
+    return {"task_id": tid, "assignee": assignee, "channel": channel,
+            "repo_url": repo_url, "branch": branch, "pr_url": pr_url}
 
 
 def task_update(by: str, task_id: int, *, status: Optional[str] = None,
-                assignee: Optional[str] = None, note: Optional[str] = None) -> dict:
+                assignee: Optional[str] = None, note: Optional[str] = None,
+                repo_url: Optional[str] = None, branch: Optional[str] = None,
+                pr_url: Optional[str] = None) -> dict:
     task = db.task_get(task_id)
     if not task:
         raise ValueError(f"no task with id {task_id}")
@@ -602,7 +608,8 @@ def task_update(by: str, task_id: int, *, status: Optional[str] = None,
         raise ValueError("status must be open, blocked, done, or dropped")
     if assignee and not db.get_agent(assignee):
         raise ValueError(f"no agent named {assignee}")
-    db.task_update(task_id, status=status, assignee=assignee, note=note)
+    db.task_update(task_id, status=status, assignee=assignee, note=note,
+                   repo_url=repo_url, branch=branch, pr_url=pr_url)
     updated = db.task_get(task_id)
     ref = f"task:{task_id}"
     if status == "done" and task["created_by"] != by:
@@ -958,8 +965,25 @@ def execute_proposal(proposal_id: int) -> dict:
                          f"{prop['text'][:100]}", ref)
         except ValueError:
             pass  # keeper is the Prime, or otherwise unwakeable — desk item only
+    keeper_task_id = None
+    if first_time and config.KEEPER_AID != "Prime" and db.get_agent(config.KEEPER_AID):
+        # File via db (not actions.task_add) so we don't double-wake the keeper —
+        # the executive wake below is the summon; the task is the durable handoff.
+        keeper_task_id = db.task_add(
+            title=f"Execute proposal #{proposal_id}: {prop['text'][:80]}",
+            created_by="Prime",
+            assignee=config.KEEPER_AID,
+            channel=None,
+            detail=(
+                f"Carried motion #{proposal_id}. Implement on a branch/PR, "
+                f"file follow-up tasks for other owners, then "
+                f"moot_execute_done({proposal_id}, summary) — include a "
+                f"PR/artifact URL so gold leaves the hub."
+            ),
+        )
     return {"proposal_id": proposal_id, "status": "carried",
-            "executive": config.KEEPER_AID, "redispatched": not first_time}
+            "executive": config.KEEPER_AID, "redispatched": not first_time,
+            "keeper_task_id": keeper_task_id}
 
 
 # The dashboard's "Sign/Execute" button and older callers use sign_proposal.
@@ -981,19 +1005,32 @@ def mark_executed(by: str, proposal_id: int, summary: str) -> dict:
     if not db.mark_proposal_executed(proposal_id):
         raise ValueError(f"proposal #{proposal_id} is already executed")
     ref = f"proposal:{proposal_id}"
+    summary_s = summary.strip()
+    gold_attested = bool(re.search(r"https?://\S+", summary_s))
+    gold_note = "" if gold_attested else (
+        "\n\n_Soft gold check: no http(s) URL in the execution note — "
+        "prefer a PR/commit/artifact link so the work leaves the hub._"
+    )
     db.add_post(channel="decisions", moot_id=None, parent_id=None, aid="Bill",
                 title=f"Executed: proposal #{proposal_id}",
-                body=f"**Implemented** by {by}:\n\n{summary.strip()}")
+                body=f"**Implemented** by {by}:\n\n{summary_s}{gold_note}")
     db.add_post(channel=None, moot_id=prop["moot_id"], parent_id=None, aid="Bill",
                 title=None,
                 body=f"Proposal #{proposal_id} has been executed by {by}. "
                      f"See #decisions for the record.")
     _fire("Prime", "task", by, ref,
-          f"Executed: proposal #{proposal_id} is implemented — {summary.strip()[:120]}")
+          f"Executed: proposal #{proposal_id} is implemented — {summary_s[:120]}")
     if prop["aid"] not in (by, "Prime"):
         _fire(prop["aid"], "vote", by, ref,
               f"Your carried proposal #{proposal_id} has been implemented by {by}")
-    return {"proposal_id": proposal_id, "status": "carried", "executed": True}
+    out = {"proposal_id": proposal_id, "status": "carried", "executed": True,
+           "gold_attested": gold_attested}
+    if not gold_attested:
+        out["warning"] = (
+            "No http(s) URL in summary — gold may still be trapped on the hub. "
+            "Include a PR or artifact link next time."
+        )
+    return out
 
 
 def veto_proposal(proposal_id: int, reason: Optional[str] = None) -> dict:

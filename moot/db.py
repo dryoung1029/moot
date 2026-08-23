@@ -123,6 +123,9 @@ def init_db() -> None:
                     "ALTER TABLE files ADD COLUMN superseded_by INTEGER",
                     "ALTER TABLE posts ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0",
                     "ALTER TABLE tasks ADD COLUMN nagged_at TEXT",
+                    "ALTER TABLE tasks ADD COLUMN repo_url TEXT",
+                    "ALTER TABLE tasks ADD COLUMN branch TEXT",
+                    "ALTER TABLE tasks ADD COLUMN pr_url TEXT",
                     "ALTER TABLE proposals ADD COLUMN executed_at TEXT",
                     "ALTER TABLE proposals ADD COLUMN resolved_at TEXT"):
             try:
@@ -941,14 +944,18 @@ def latest_file_version(file_id: int) -> int:
 # --------------------------------------------------------------------------- #
 
 def task_add(*, title: str, created_by: str, assignee: Optional[str],
-             channel: Optional[str], detail: Optional[str]) -> int:
+             channel: Optional[str], detail: Optional[str],
+             repo_url: Optional[str] = None, branch: Optional[str] = None,
+             pr_url: Optional[str] = None) -> int:
     ts = now()
     with tx() as conn:
         cur = conn.execute(
             """INSERT INTO tasks(channel, title, detail, created_by, assignee,
-                                 status, created_at, updated_at)
-               VALUES (?,?,?,?,?,'open',?,?)""",
-            (channel, title, detail, created_by, assignee, ts, ts))
+                                 status, repo_url, branch, pr_url,
+                                 created_at, updated_at)
+               VALUES (?,?,?,?,?,'open',?,?,?,?,?)""",
+            (channel, title, detail, created_by, assignee,
+             repo_url, branch, pr_url, ts, ts))
         _fts_index(conn, "task", cur.lastrowid, title, detail,
                    assignee or created_by, channel, ts)
         return cur.lastrowid
@@ -962,10 +969,14 @@ def task_get(task_id: int) -> Optional[dict]:
 
 def task_update(task_id: int, *, status: Optional[str] = None,
                 assignee: Optional[str] = None, note: Optional[str] = None,
-                detail: Optional[str] = None) -> bool:
+                detail: Optional[str] = None,
+                repo_url: Optional[str] = None, branch: Optional[str] = None,
+                pr_url: Optional[str] = None) -> bool:
     sets, vals = ["updated_at = ?"], [now()]
     for col, val in (("status", status), ("assignee", assignee),
-                     ("note", note), ("detail", detail)):
+                     ("note", note), ("detail", detail),
+                     ("repo_url", repo_url), ("branch", branch),
+                     ("pr_url", pr_url)):
         if val is not None:
             sets.append(f"{col} = ?")
             vals.append(val)
@@ -1220,6 +1231,75 @@ def carried_pending_execution() -> list[dict]:
                JOIN moots m ON m.id = p.moot_id
                WHERE p.status = 'carried' AND p.executed_at IS NULL
                ORDER BY p.id"""))
+
+
+def dispatch_board() -> dict:
+    """Prime's single desk: needs Prime, needs the keeper, or stuck.
+
+    Aggregates signatures, the executive queue, escalated wakes, blocked/stale
+    tasks, and overdue agents — the remodel's first-screen answer to
+    "what needs me / what's stuck / what's shipping."
+    """
+    from . import config  # local import avoids cycles at module load
+    awaiting = [p for p in decisions_awaiting() if p["status"] == "awaiting_prime"]
+    executive = carried_pending_execution()
+    wakes = list_wake_requests(open_only=True)
+    escalated = [w for w in wakes if w.get("escalated")]
+    blocked = task_list(status="blocked", limit=50)
+    stale = []
+    for t in task_list(status="open", limit=100):
+        if hours_since(t.get("updated_at")) >= config.TASK_STALE_HOURS:
+            stale.append(t)
+    overdue = overdue_agents(config.CHECKIN_HOURS)
+    return {
+        "needs_prime": {
+            "signatures": awaiting,
+            "escalated_wakes": escalated,
+        },
+        "needs_keeper": {
+            "executive_queue": executive,
+        },
+        "stuck": {
+            "blocked_tasks": blocked,
+            "stale_tasks": stale,
+            "overdue_agents": overdue,
+            "open_wakes": wakes,
+        },
+        "counts": {
+            "needs_prime": len(awaiting) + len(escalated),
+            "needs_keeper": len(executive),
+            "stuck": len(blocked) + len(stale) + len(overdue),
+            "wakes": len(wakes),
+        },
+    }
+
+
+def projects_health() -> list[dict]:
+    """Projects with open/blocked task counts and ledger age — Prime project strip."""
+    out = []
+    for p in projects_all():
+        ch = p.get("channel")
+        open_n = blocked_n = 0
+        if ch:
+            for t in task_list(channel=ch, limit=200):
+                if t["status"] == "open":
+                    open_n += 1
+                elif t["status"] == "blocked":
+                    blocked_n += 1
+        ledger_age_hours = None
+        lid = p.get("ledger_file_id")
+        if lid:
+            f = get_file(lid)
+            if f and f.get("created_at"):
+                # Prefer superseded chain tip age if present via created_at of current file.
+                ledger_age_hours = round(hours_since(f["created_at"]), 1)
+        out.append({
+            **p,
+            "tasks_open": open_n,
+            "tasks_blocked": blocked_n,
+            "ledger_age_hours": ledger_age_hours,
+        })
+    return out
 
 
 def mark_proposal_executed(proposal_id: int) -> bool:

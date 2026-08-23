@@ -212,7 +212,9 @@ async def _task_add(request: Request, agent: dict) -> JSONResponse:
     d = await _body(request)
     return JSONResponse(actions.task_add(
         agent["aid"], d.get("title", ""), assignee=d.get("assignee"),
-        channel=d.get("channel"), detail=d.get("detail")))
+        channel=d.get("channel"), detail=d.get("detail"),
+        repo_url=d.get("repo_url"), branch=d.get("branch"),
+        pr_url=d.get("pr_url")))
 
 
 @ _authed
@@ -220,7 +222,9 @@ async def _task_update(request: Request, agent: dict) -> JSONResponse:
     d = await _body(request)
     return JSONResponse(actions.task_update(
         agent["aid"], int(request.path_params["task_id"]),
-        status=d.get("status"), assignee=d.get("assignee"), note=d.get("note")))
+        status=d.get("status"), assignee=d.get("assignee"), note=d.get("note"),
+        repo_url=d.get("repo_url"), branch=d.get("branch"),
+        pr_url=d.get("pr_url")))
 
 
 @ _authed

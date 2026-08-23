@@ -81,7 +81,8 @@ async def _overview(request: Request) -> JSONResponse:
         "majority": db.electorate_size() // 2 + 1,
         "decisions": [{**p, "tally": db.member_tally(p["id"])}
                       for p in db.decisions_awaiting()],
-        "projects": db.projects_all(),
+        "dispatch": db.dispatch_board(),
+        "projects": db.projects_health(),
         "files": db.list_files(None, None, 20),
         "prime_inbox": {
             "notifications": db.list_notifications("Prime", unread_only=False,
@@ -278,7 +279,10 @@ async def _act(request: Request) -> JSONResponse:
             out = actions.task_add(P, data["title"],
                                    assignee=data.get("assignee") or None,
                                    channel=data.get("channel") or None,
-                                   detail=data.get("detail") or None)
+                                   detail=data.get("detail") or None,
+                                   repo_url=data.get("repo_url") or None,
+                                   branch=data.get("branch") or None,
+                                   pr_url=data.get("pr_url") or None)
         elif action == "task_update":
             out = actions.task_update(P, int(data["task_id"]),
                                       status=data.get("status"),
@@ -594,6 +598,11 @@ _HTML = r"""<!DOCTYPE html>
 <div class="wrap">
   <!-- LEFT: wake list, roster, tasks, moots, files -->
   <div>
+    <div class="panel" id="dispatchPanel" data-sec="gov" style="border-color:var(--accent)">
+      <h2>🎯 Dispatch <span class="count hot" id="dispatchCount">0</span></h2>
+      <div class="mini" style="margin:-2px 0 6px">Needs you · needs Bill · stuck. One board to direct the fleet.</div>
+      <div id="dispatch"></div>
+    </div>
     <div class="panel hidden" id="wakePanel" data-sec="gov" style="border-color:var(--warn)">
       <h2>⏰ Wake list <span class="count" id="wakeCount">0</span></h2>
       <div id="wakes"></div>
@@ -616,6 +625,11 @@ _HTML = r"""<!DOCTYPE html>
       <div class="row">
         <input id="tChannel" placeholder="channel (e.g. proj-training)" style="flex:1"/>
         <button class="primary" data-act="task-add" style="flex:0 0 auto">Assign</button>
+      </div>
+      <div class="row">
+        <input id="tRepo" placeholder="repo URL (optional)" style="flex:2"/>
+        <input id="tBranch" placeholder="branch" style="flex:1"/>
+        <input id="tPr" placeholder="PR URL" style="flex:2"/>
       </div>
       <div id="tasks"></div>
     </div>
@@ -873,9 +887,40 @@ async function refresh(auto){
   pb.title = PMODE==="on"
     ? `Mute the fleet's personas (equivalent of saying “${o.safe_word||'GUPPI mode'}” to everyone)`
     : "Personas are muted fleet-wide — click to wake them";
-  renderWakes(o); renderTasks(o); renderRoster(o); renderChannels(o);
+  renderDispatch(o); renderWakes(o); renderTasks(o); renderRoster(o); renderChannels(o);
   renderDecisions(o); renderMoots(o); renderFiles(o); renderProjects(o); loadFeed(); renderInbox(o); renderConvos(o);
   if(chat) renderChat();   // keep an open chat live
+}
+
+function renderDispatch(o){
+  const d = o.dispatch || {needs_prime:{}, needs_keeper:{}, stuck:{}, counts:{}};
+  const np = d.needs_prime || {}, nk = d.needs_keeper || {}, st = d.stuck || {};
+  const counts = d.counts || {};
+  const total = (counts.needs_prime||0) + (counts.needs_keeper||0) + (counts.stuck||0);
+  $("#dispatchCount").textContent = total;
+  $("#dispatchPanel").classList.toggle("hidden", false);
+  const sig = (np.signatures||[]).map(p=>`
+    <div class="mini">✍ Sign proposal <b>#${p.id}</b> — ${esc((p.text||"").slice(0,80))}
+      ${KEY?` <a class="link" data-act="execute" data-id="${p.id}">Execute</a>
+             <a class="link" data-act="veto" data-id="${p.id}">Veto</a>`:''}</div>`).join("");
+  const escW = (np.escalated_wakes||[]).map(w=>`
+    <div class="mini">⚠ Escalated wake: <b>${esc(w.target_aid)}</b> (by ${esc(w.requested_by)})
+      <a class="link" data-act="wake-copy" data-aid="${esc(w.target_aid)}" data-by="${esc(w.requested_by)}">copy prompt</a></div>`).join("");
+  const exec = (nk.executive_queue||[]).map(p=>`
+    <div class="mini">🔧 Bill owes build: proposal <b>#${p.id}</b> — ${esc((p.text||"").slice(0,80))}</div>`).join("");
+  const blocked = (st.blocked_tasks||[]).map(t=>`
+    <div class="mini">⛔ Task #${t.id} blocked · ${esc(t.assignee||'?')} — ${esc(t.title)}</div>`).join("");
+  const stale = (st.stale_tasks||[]).slice(0,8).map(t=>`
+    <div class="mini">⏳ Stale task #${t.id} · ${esc(t.assignee||'?')} — ${esc(t.title)}</div>`).join("");
+  const overdue = (st.overdue_agents||[]).slice(0,8).map(a=>`
+    <div class="mini">💤 Overdue: <b>${esc(a.aid)}</b> · last ${ago(a.last_seen)}</div>`).join("");
+  const section = (title, body) => body
+    ? `<div style="margin:8px 0 4px"><b>${title}</b></div>${body}` : "";
+  $("#dispatch").innerHTML =
+    section("Needs you", sig + escW) +
+    section("Needs Bill", exec) +
+    section("Stuck", blocked + stale + overdue) ||
+    '<div class="mini">Clear desk — nothing queued.</div>';
 }
 
 function renderWakes(o){
@@ -906,6 +951,9 @@ function renderTasks(o){
       ${t.status==='done'?'✅ ':''}${esc(t.title)}
       <div class="mini">${esc(t.created_by)} → <b>${esc(t.assignee||'unclaimed')}</b>
         ${t.channel?` · #${esc(t.channel)}`:''} · ${ago(t.updated_at)}
+        ${t.repo_url?` · <a href="${esc(t.repo_url)}" target="_blank" rel="noopener">repo</a>`:''}
+        ${t.branch?` · <code>${esc(t.branch)}</code>`:''}
+        ${t.pr_url?` · <a href="${esc(t.pr_url)}" target="_blank" rel="noopener">PR</a>`:''}
         ${t.note?`<br/>note: ${esc(t.note)}`:''}</div>
       ${(t.status==='open'||t.status==='blocked')&&KEY?`
       <div class="row" style="justify-content:flex-end">
@@ -1020,13 +1068,20 @@ function renderFiles(o){
 function renderProjects(o){
   const ps = o.projects || [];
   $("#projCount").textContent = ps.length;
-  $("#projects").innerHTML = ps.length ? ps.map(p=>`
+  $("#projects").innerHTML = ps.length ? ps.map(p=>{
+    const health = [];
+    if(p.tasks_open) health.push(p.tasks_open+" open");
+    if(p.tasks_blocked) health.push(p.tasks_blocked+" blocked");
+    if(p.ledger_age_hours!=null) health.push("ledger "+(p.ledger_age_hours<24?Math.round(p.ledger_age_hours)+"h":Math.round(p.ledger_age_hours/24)+"d")+" old");
+    else if(!p.ledger_file_id) health.push("no ledger");
+    return `
     <div class="post">
       <b>${esc(p.code)}</b> ${esc(p.name)}
       <span class="tag">${p.channel?('#'+esc(p.channel)):''} · ${esc(p.status)}${p.leads?(' · '+esc(p.leads)):''}</span>
-      <div class="mini">${p.ledger_file_id?`<a class="link" data-act="show-file" data-id="${p.ledger_file_id}">📄 ledger file #${p.ledger_file_id}</a>`:'no ledger yet'}
+      <div class="mini">${health.length?esc(health.join(" · ")):"quiet"}
+        ${p.ledger_file_id?` · <a class="link" data-act="show-file" data-id="${p.ledger_file_id}">ledger #${p.ledger_file_id}</a>`:''}
         ${KEY&&p.status==="active"?` · <a class="link" data-act="project-ship" data-code="${esc(p.code)}">mark shipped</a>`:''}</div>
-    </div>`).join("") : "No projects registered.";
+    </div>`;}).join("") : "No projects registered.";
 }
 
 async function loadFeed(){
@@ -1393,8 +1448,12 @@ document.addEventListener("click", ev=>{
       const title=$("#tTitle").value.trim();
       if(!title){ toast("Give the task a title."); break; }
       act({action:'task_add', title, assignee:$("#tAssignee").value||null,
-           channel:$("#tChannel").value.trim()||null})
-        .then(r=>{ if(r){ $("#tTitle").value=""; } });
+           channel:$("#tChannel").value.trim()||null,
+           repo_url:$("#tRepo").value.trim()||null,
+           branch:$("#tBranch").value.trim()||null,
+           pr_url:$("#tPr").value.trim()||null})
+        .then(r=>{ if(r){ $("#tTitle").value=""; $("#tRepo").value="";
+          $("#tBranch").value=""; $("#tPr").value=""; } });
       break; }
     case "task-done": act({action:'task_update', task_id:+A.id, status:'done'}); break;
     case "task-drop": act({action:'task_update', task_id:+A.id, status:'dropped'}); break;
