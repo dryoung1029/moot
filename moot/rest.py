@@ -214,7 +214,7 @@ async def _task_add(request: Request, agent: dict) -> JSONResponse:
         agent["aid"], d.get("title", ""), assignee=d.get("assignee"),
         channel=d.get("channel"), detail=d.get("detail"),
         repo_url=d.get("repo_url"), branch=d.get("branch"),
-        pr_url=d.get("pr_url")))
+        pr_url=d.get("pr_url"), status=d.get("status")))
 
 
 @ _authed

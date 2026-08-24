@@ -126,12 +126,23 @@ def init_db() -> None:
                     "ALTER TABLE tasks ADD COLUMN repo_url TEXT",
                     "ALTER TABLE tasks ADD COLUMN branch TEXT",
                     "ALTER TABLE tasks ADD COLUMN pr_url TEXT",
+                    "ALTER TABLE tasks ADD COLUMN source_kind TEXT",
+                    "ALTER TABLE tasks ADD COLUMN source_id INTEGER",
+                    "ALTER TABLE tasks ADD COLUMN shipped_at TEXT",
                     "ALTER TABLE proposals ADD COLUMN executed_at TEXT",
                     "ALTER TABLE proposals ADD COLUMN resolved_at TEXT"):
             try:
                 conn.execute(ddl)
             except sqlite3.OperationalError:
                 pass  # column already present
+        try:
+            conn.execute(
+                """CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_source
+                   ON tasks(source_kind, source_id) WHERE source_id IS NOT NULL""")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, updated_at)")
+        except sqlite3.OperationalError:
+            pass
         # Backfill: a carried motion's executed_at is already a trustworthy
         # resolution stamp; everything else predates resolved_at and simply
         # won't appear in the catch-up report (forward-looking tool, no loss).
@@ -946,16 +957,19 @@ def latest_file_version(file_id: int) -> int:
 def task_add(*, title: str, created_by: str, assignee: Optional[str],
              channel: Optional[str], detail: Optional[str],
              repo_url: Optional[str] = None, branch: Optional[str] = None,
-             pr_url: Optional[str] = None) -> int:
+             pr_url: Optional[str] = None, status: str = "open",
+             source_kind: Optional[str] = None,
+             source_id: Optional[int] = None) -> int:
     ts = now()
+    status = status or ("open" if assignee else "idea")
     with tx() as conn:
         cur = conn.execute(
             """INSERT INTO tasks(channel, title, detail, created_by, assignee,
                                  status, repo_url, branch, pr_url,
-                                 created_at, updated_at)
-               VALUES (?,?,?,?,?,'open',?,?,?,?,?)""",
-            (channel, title, detail, created_by, assignee,
-             repo_url, branch, pr_url, ts, ts))
+                                 source_kind, source_id, created_at, updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (channel, title, detail, created_by, assignee, status,
+             repo_url, branch, pr_url, source_kind, source_id, ts, ts))
         _fts_index(conn, "task", cur.lastrowid, title, detail,
                    assignee or created_by, channel, ts)
         return cur.lastrowid
@@ -972,7 +986,8 @@ def task_update(task_id: int, *, status: Optional[str] = None,
                 detail: Optional[str] = None,
                 repo_url: Optional[str] = None, branch: Optional[str] = None,
                 pr_url: Optional[str] = None) -> bool:
-    sets, vals = ["updated_at = ?"], [now()]
+    ts = now()
+    sets, vals = ["updated_at = ?"], [ts]
     for col, val in (("status", status), ("assignee", assignee),
                      ("note", note), ("detail", detail),
                      ("repo_url", repo_url), ("branch", branch),
@@ -980,6 +995,9 @@ def task_update(task_id: int, *, status: Optional[str] = None,
         if val is not None:
             sets.append(f"{col} = ?")
             vals.append(val)
+    if status == "shipped":
+        sets.append("shipped_at = COALESCE(shipped_at, ?)")
+        vals.append(ts)
     vals.append(task_id)
     with tx() as conn:
         return conn.execute(
@@ -1300,6 +1318,108 @@ def projects_health() -> list[dict]:
             "ledger_age_hours": ledger_age_hours,
         })
     return out
+
+
+
+
+def task_by_source(source_kind: str, source_id: int) -> Optional[dict]:
+    with tx() as conn:
+        row = conn.execute(
+            """SELECT * FROM tasks WHERE source_kind = ? AND source_id = ?
+               LIMIT 1""", (source_kind, source_id)).fetchone()
+        return dict(row) if row else None
+
+
+def action_candidates(limit: int = 20) -> list[dict]:
+    """Promote-able ideas sitting in the archive — not yet tasks.
+
+    Ranked discussion, recent insights, and tip file versions. Never auto-files
+    work; the Prime promote gate creates the task.
+    """
+    since = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat(timespec="seconds")
+    out: list[dict] = []
+    with tx() as conn:
+        sourced = {(r["source_kind"], r["source_id"]) for r in conn.execute(
+            """SELECT source_kind, source_id FROM tasks
+               WHERE source_id IS NOT NULL""")}
+        posts = _rows(conn.execute(
+            """SELECT p.*,
+                   (SELECT COUNT(*) FROM posts c WHERE c.parent_id = p.id) AS replies,
+                   (SELECT COUNT(*) FROM reactions r WHERE r.post_id = p.id) AS reaction_count
+               FROM posts p
+               WHERE p.parent_id IS NULL AND p.moot_id IS NULL
+                 AND p.channel IS NOT NULL AND p.channel NOT IN ('log', 'decisions')
+                 AND p.created_at >= ?
+               ORDER BY (replies + reaction_count) DESC, p.id DESC
+               LIMIT ?""", (since, limit * 2)))
+        for p in posts:
+            if ("post", p["id"]) in sourced:
+                continue
+            score = (p.get("replies") or 0) + (p.get("reaction_count") or 0)
+            out.append({
+                "source_kind": "post", "source_id": p["id"],
+                "title": (p.get("title") or (p.get("body") or "")[:80]).strip() or f"Post #{p['id']}",
+                "detail": (p.get("body") or "")[:400],
+                "channel": p.get("channel"), "aid": p.get("aid"),
+                "score": score, "created_at": p.get("created_at"),
+                "why": f"#{p.get('channel')} · {score} engagement",
+            })
+        insights = _rows(conn.execute(
+            """SELECT * FROM insights WHERE created_at >= ?
+               ORDER BY id DESC LIMIT ?""", (since, limit)))
+        for i in insights:
+            if ("insight", i["id"]) in sourced:
+                continue
+            out.append({
+                "source_kind": "insight", "source_id": i["id"],
+                "title": f"Insight: {i.get('topic') or 'untitled'}",
+                "detail": (i.get("note") or f"{i.get('learner')} ← {i.get('teacher')}"),
+                "channel": "skunkworks", "aid": i.get("learner"),
+                "score": 1, "created_at": i.get("created_at"),
+                "why": f"taught by {i.get('teacher')}",
+            })
+        files = _rows(conn.execute(
+            """SELECT id, aid, filename, description, channel, created_at FROM files
+               WHERE superseded_by IS NULL AND created_at >= ?
+                 AND (description IS NOT NULL AND description != '')
+               ORDER BY id DESC LIMIT ?""", (since, limit)))
+        for f in files:
+            if ("file", f["id"]) in sourced:
+                continue
+            out.append({
+                "source_kind": "file", "source_id": f["id"],
+                "title": f"Archive: {f.get('filename')}",
+                "detail": f.get("description") or "",
+                "channel": f.get("channel"), "aid": f.get("aid"),
+                "score": 1, "created_at": f.get("created_at"),
+                "why": "shared file with a description",
+            })
+    out.sort(key=lambda x: (x.get("score") or 0, x.get("created_at") or ""),
+             reverse=True)
+    return out[:limit]
+
+
+def action_board() -> dict:
+    """Prime Action Board: ideas → active → landed → shipped + promote candidates."""
+    ideas = task_list(status="idea", limit=40)
+    active = [t for t in task_list(limit=80)
+              if t["status"] in ("open", "blocked")]
+    landed = task_list(status="done", limit=20)
+    shipped = task_list(status="shipped", limit=10)
+    candidates = action_candidates(limit=15)
+    return {
+        "ideas": ideas,
+        "active": active,
+        "landed": landed,
+        "shipped": shipped,
+        "candidates": candidates,
+        "counts": {
+            "ideas": len(ideas),
+            "active": len(active),
+            "landed": len(landed),
+            "candidates": len(candidates),
+        },
+    }
 
 
 def mark_proposal_executed(proposal_id: int) -> bool:

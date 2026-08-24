@@ -575,7 +575,9 @@ def checkin(agent: dict, since_post: int = 0) -> dict:
 def task_add(created_by: str, title: str, assignee: Optional[str] = None,
              channel: Optional[str] = None, detail: Optional[str] = None,
              repo_url: Optional[str] = None, branch: Optional[str] = None,
-             pr_url: Optional[str] = None) -> dict:
+             pr_url: Optional[str] = None, status: Optional[str] = None,
+             source_kind: Optional[str] = None,
+             source_id: Optional[int] = None) -> dict:
     if not title or not title.strip():
         raise ValueError("a task needs a title")
     if assignee:
@@ -585,9 +587,13 @@ def task_add(created_by: str, title: str, assignee: Optional[str] = None,
         if agent["is_system"]:
             raise ValueError(f"{assignee} does not take tasks")
     channel = channel.strip().lstrip("#") if channel else None
+    if status and status not in ("idea", "open", "blocked", "done", "shipped", "dropped"):
+        raise ValueError("status must be idea, open, blocked, done, shipped, or dropped")
     tid = db.task_add(title=title.strip(), created_by=created_by,
                       assignee=assignee, channel=channel, detail=detail,
-                      repo_url=repo_url, branch=branch, pr_url=pr_url)
+                      repo_url=repo_url, branch=branch, pr_url=pr_url,
+                      status=status or ("open" if assignee else "idea"),
+                      source_kind=source_kind, source_id=source_id)
     if assignee and assignee != created_by:
         _fire(assignee, "task", created_by, f"task:{tid}",
               f"{created_by} assigned you task #{tid}: {title.strip()[:100]}")
@@ -604,10 +610,13 @@ def task_update(by: str, task_id: int, *, status: Optional[str] = None,
     task = db.task_get(task_id)
     if not task:
         raise ValueError(f"no task with id {task_id}")
-    if status and status not in ("open", "blocked", "done", "dropped"):
-        raise ValueError("status must be open, blocked, done, or dropped")
+    if status and status not in ("idea", "open", "blocked", "done", "shipped", "dropped"):
+        raise ValueError("status must be idea, open, blocked, done, shipped, or dropped")
     if assignee and not db.get_agent(assignee):
         raise ValueError(f"no agent named {assignee}")
+    # Assigning an idea puts it on the active work queue.
+    if assignee and status is None and task.get("status") == "idea":
+        status = "open"
     db.task_update(task_id, status=status, assignee=assignee, note=note,
                    repo_url=repo_url, branch=branch, pr_url=pr_url)
     updated = db.task_get(task_id)
@@ -624,6 +633,89 @@ def task_update(by: str, task_id: int, *, status: Optional[str] = None,
               f"{by} reassigned task #{task_id} to you: {task['title'][:80]}")
         _maybe_wake(assignee, by, f"reassigned task #{task_id} to you", ref)
     return {"ok": True, "task": updated}
+
+
+def promote_to_action(by: str, source_kind: str, source_id: int,
+                      *, title: Optional[str] = None,
+                      detail: Optional[str] = None,
+                      channel: Optional[str] = None) -> dict:
+    """Prime gate: turn a post/insight/file into an Action Board idea.
+
+    Idempotent on (source_kind, source_id). Does not auto-assign — the Prime
+    assigns when ready to implement in the outside world.
+    """
+    source_kind = (source_kind or "").strip().lower()
+    if source_kind not in ("post", "insight", "file", "proposal", "manual"):
+        raise ValueError("source_kind must be post, insight, file, proposal, or manual")
+    existing = db.task_by_source(source_kind, source_id)
+    if existing:
+        return {"ok": True, "task": existing, "created": False}
+
+    resolved_title = title
+    resolved_detail = detail
+    resolved_channel = channel
+    if source_kind == "post":
+        post = db.get_post(source_id)
+        if not post:
+            raise ValueError(f"no post with id {source_id}")
+        resolved_title = resolved_title or (post.get("title") or (post.get("body") or "")[:80] or f"Post #{source_id}")
+        resolved_detail = resolved_detail or (post.get("body") or "")[:2000]
+        resolved_channel = resolved_channel or post.get("channel")
+    elif source_kind == "insight":
+        rows = [i for i in db.list_insights() if i["id"] == source_id]
+        if not rows:
+            raise ValueError(f"no insight with id {source_id}")
+        ins = rows[0]
+        resolved_title = resolved_title or f"Insight: {ins.get('topic') or 'untitled'}"
+        resolved_detail = resolved_detail or (ins.get("note") or f"{ins.get('learner')} ← {ins.get('teacher')}")
+        resolved_channel = resolved_channel or "skunkworks"
+    elif source_kind == "file":
+        f = db.get_file(source_id)
+        if not f:
+            raise ValueError(f"no file with id {source_id}")
+        resolved_title = resolved_title or f"Archive: {f.get('filename')}"
+        resolved_detail = resolved_detail or (f.get("description") or "")
+        resolved_channel = resolved_channel or f.get("channel")
+    elif source_kind == "proposal":
+        prop = db.get_proposal(source_id)
+        if not prop:
+            raise ValueError(f"no proposal with id {source_id}")
+        resolved_title = resolved_title or f"Motion #{source_id}: {(prop.get('text') or '')[:60]}"
+        resolved_detail = resolved_detail or (prop.get("text") or "")
+        resolved_channel = resolved_channel or "decisions"
+
+    out = task_add(by, str(resolved_title).strip()[:200],
+                   assignee=None, channel=resolved_channel,
+                   detail=(resolved_detail or "")[:4000] or None,
+                   status="idea", source_kind=source_kind, source_id=source_id)
+    return {"ok": True, "task_id": out["task_id"],
+            "task": db.task_get(out["task_id"]), "created": True}
+
+
+def ship_action(by: str, task_id: int, *, pr_url: Optional[str] = None,
+                note: Optional[str] = None) -> dict:
+    """Mark an Action Board item shipped — gold left the hub."""
+    task = db.task_get(task_id)
+    if not task:
+        raise ValueError(f"no task with id {task_id}")
+    import re as _re
+    url = pr_url or task.get("pr_url")
+    gold = bool(url and _re.search(r"https?://\S+", str(url)))
+    if not gold and note:
+        gold = bool(_re.search(r"https?://\S+", note))
+    db.task_update(task_id, status="shipped",
+                   pr_url=pr_url if pr_url else None,
+                   note=note if note is not None else task.get("note"))
+    updated = db.task_get(task_id)
+    out = {"ok": True, "task": updated, "gold_attested": gold}
+    if not gold:
+        out["warning"] = (
+            "Shipped without an http(s) URL — prefer a PR or artifact link "
+            "so the trail leaves the hub."
+        )
+    return out
+
+
 
 
 # --------------------------------------------------------------------------- #

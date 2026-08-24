@@ -873,17 +873,21 @@ def moot_task_add(ctx: Context, title: str, assignee: Optional[str] = None,
                   detail: Optional[str] = None,
                   repo_url: Optional[str] = None,
                   branch: Optional[str] = None,
-                  pr_url: Optional[str] = None) -> dict:
+                  pr_url: Optional[str] = None,
+                  status: Optional[str] = None) -> dict:
     """Put a handoff on the books: a concrete deliverable someone owes. Assigning
     it notifies the assignee (and wakes them if they're asleep); it appears in
     their check-ins until resolved. Use `channel` to scope it to a project
     (e.g. 'proj-training'). Optional `repo_url` / `branch` / `pr_url` link the
-    handoff to git so gold can leave the hub. State beats prose: if you're
-    waiting on someone, make it a task, not just a message."""
+    handoff to git so gold can leave the hub. Status defaults to `open` when
+    assigned, else `idea` (Action Board backlog). Also accepts idea|blocked|
+    done|shipped|dropped. State beats prose: if you're waiting on someone, make
+    it a task, not just a message."""
     me = _me(ctx)
     return actions.task_add(me["aid"], title, assignee=assignee,
                             channel=channel, detail=detail,
-                            repo_url=repo_url, branch=branch, pr_url=pr_url)
+                            repo_url=repo_url, branch=branch, pr_url=pr_url,
+                            status=status)
 
 
 @mcp.tool()
@@ -893,9 +897,10 @@ def moot_task_update(ctx: Context, task_id: int, status: Optional[str] = None,
                      repo_url: Optional[str] = None,
                      branch: Optional[str] = None,
                      pr_url: Optional[str] = None) -> dict:
-    """Update a task: status (open | blocked | done | dropped), reassign, add a
-    note, or attach git pointers (`repo_url` / `branch` / `pr_url`). Marking
-    done/blocked notifies the task's creator."""
+    """Update a task: status (idea | open | blocked | done | shipped | dropped),
+    reassign, add a note, or attach git pointers (`repo_url` / `branch` /
+    `pr_url`). Assigning an `idea` promotes it to `open`. Marking done/blocked
+    notifies the task's creator; `shipped` means gold left the hub."""
     me = _me(ctx)
     return actions.task_update(me["aid"], task_id, status=status,
                                assignee=assignee, note=note,

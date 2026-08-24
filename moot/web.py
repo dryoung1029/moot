@@ -82,6 +82,7 @@ async def _overview(request: Request) -> JSONResponse:
         "decisions": [{**p, "tally": db.member_tally(p["id"])}
                       for p in db.decisions_awaiting()],
         "dispatch": db.dispatch_board(),
+        "action_board": db.action_board(),
         "projects": db.projects_health(),
         "files": db.list_files(None, None, 20),
         "prime_inbox": {
@@ -282,12 +283,26 @@ async def _act(request: Request) -> JSONResponse:
                                    detail=data.get("detail") or None,
                                    repo_url=data.get("repo_url") or None,
                                    branch=data.get("branch") or None,
-                                   pr_url=data.get("pr_url") or None)
+                                   pr_url=data.get("pr_url") or None,
+                                   status=data.get("status") or None)
         elif action == "task_update":
             out = actions.task_update(P, int(data["task_id"]),
                                       status=data.get("status"),
                                       assignee=data.get("assignee"),
-                                      note=data.get("note"))
+                                      note=data.get("note"),
+                                      repo_url=data.get("repo_url"),
+                                      branch=data.get("branch"),
+                                      pr_url=data.get("pr_url"))
+        elif action == "promote_action":
+            out = actions.promote_to_action(
+                P, data["source_kind"], int(data["source_id"]),
+                title=data.get("title"), detail=data.get("detail"),
+                channel=data.get("channel"))
+        elif action == "ship_action":
+            out = actions.ship_action(
+                P, int(data["task_id"]),
+                pr_url=data.get("pr_url") or None,
+                note=data.get("note") or None)
         elif action == "notif_read":
             out = {"ok": db.mark_notification_read(int(data["id"]), P)}
         elif action == "notif_delete":
@@ -413,10 +428,37 @@ _HTML = r"""<!DOCTYPE html>
            border:1px solid var(--line); border-radius:8px; padding:10px 14px; display:none; z-index:20; }
   textarea { width:100%; min-height:64px; resize:vertical; }
   img.preview { max-width:100%; border-radius:8px; margin-top:6px; }
-  .avatar { width:26px; height:26px; border-radius:50%; display:inline-flex;
-            align-items:center; justify-content:center; font-size:12px; font-weight:700;
-            color:#fff; flex:0 0 26px; user-select:none; }
-  .avatar.sm { width:20px; height:20px; flex-basis:20px; font-size:10px; }
+  .avatar { width:28px; height:28px; border-radius:50%; display:inline-flex;
+            align-items:center; justify-content:center; font-size:11px; font-weight:700;
+            color:#fff; flex:0 0 28px; user-select:none; overflow:hidden;
+            box-shadow:inset 0 0 0 1px rgba(255,255,255,.12); position:relative; }
+  .avatar.sm { width:22px; height:22px; flex-basis:22px; font-size:9px; }
+  .avatar svg { width:100%; height:100%; display:block; }
+  .avatar .av-letter { position:absolute; inset:0; display:flex; align-items:center;
+                       justify-content:center; text-shadow:0 1px 2px rgba(0,0,0,.45);
+                       letter-spacing:-.02em; }
+
+  /* Action Board */
+  .ab-sec { margin:10px 0 4px; font-size:11px; font-weight:700; color:var(--muted);
+            text-transform:uppercase; letter-spacing:.04em; display:flex; gap:6px;
+            align-items:center; }
+  .ab-sec .count { margin-left:auto; }
+  .ab-row { display:flex; gap:8px; align-items:flex-start; padding:7px 2px;
+            border-bottom:1px solid #21262d; }
+  .ab-row:last-child { border-bottom:none; }
+  .ab-main { flex:1; min-width:0; }
+  .ab-title { font-size:13px; font-weight:600; line-height:1.25;
+              white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .ab-why { color:var(--muted); font-size:11px; margin-top:2px;
+            white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .ab-acts { display:flex; flex-wrap:wrap; gap:4px; justify-content:flex-end;
+             flex:0 0 auto; max-width:46%; }
+  .ab-acts select { width:auto; min-width:72px; max-width:110px; padding:2px 6px;
+                    font-size:11px; }
+  .post.compact { padding:7px 0; }
+  .post .preview { color:var(--muted); font-size:13px; margin-top:3px;
+                   line-height:1.35; overflow-wrap:anywhere; }
+  .post .meta .acts { margin-left:auto; display:inline-flex; gap:6px; }
 
   /* Roster: collapsible agent cards */
   .agent { border-bottom:1px solid #21262d; }
@@ -430,7 +472,7 @@ _HTML = r"""<!DOCTYPE html>
   .agent-head .grow { flex:1; min-width:0; display:flex; align-items:baseline; gap:6px; }
   .chev { color:var(--muted); font-size:10px; transition:transform .12s; }
   .agent.open .chev { transform:rotate(90deg); }
-  .agent-body { padding:2px 6px 10px 36px; }
+  .agent-body { padding:2px 6px 10px 40px; }
   .agent-body .kv { font-size:12px; color:var(--muted); margin:2px 0; }
   .agent-body .kv b { color:var(--ink); font-weight:600; }
   .quirk { color:var(--muted); font-size:12px; font-style:italic; }
@@ -598,9 +640,14 @@ _HTML = r"""<!DOCTYPE html>
 <div class="wrap">
   <!-- LEFT: wake list, roster, tasks, moots, files -->
   <div>
+    <div class="panel" id="actionPanel" data-sec="gov" style="border-color:var(--good)">
+      <h2>🚀 Action Board <span class="count hot" id="actionCount">0</span></h2>
+      <div class="mini" style="margin:-2px 0 6px">Ideas → assign → land → ship outside the hub.</div>
+      <div id="actionBoard"></div>
+    </div>
     <div class="panel" id="dispatchPanel" data-sec="gov" style="border-color:var(--accent)">
       <h2>🎯 Dispatch <span class="count hot" id="dispatchCount">0</span></h2>
-      <div class="mini" style="margin:-2px 0 6px">Needs you · needs Bill · stuck. One board to direct the fleet.</div>
+      <div class="mini" style="margin:-2px 0 6px">Signatures · Bill · stuck.</div>
       <div id="dispatch"></div>
     </div>
     <div class="panel hidden" id="wakePanel" data-sec="gov" style="border-color:var(--warn)">
@@ -617,21 +664,21 @@ _HTML = r"""<!DOCTYPE html>
       <div id="roster"></div>
     </div>
     <div class="panel" data-sec="gov">
-      <h2>📋 Tasks <span class="count" id="taskCount">0</span></h2>
+      <h2>＋ Quick assign</h2>
       <div class="row">
-        <input id="tTitle" placeholder="new task…" style="flex:2"/>
+        <input id="tTitle" placeholder="new action…" style="flex:2"/>
         <select id="tAssignee" style="flex:1"></select>
       </div>
       <div class="row">
-        <input id="tChannel" placeholder="channel (e.g. proj-training)" style="flex:1"/>
-        <button class="primary" data-act="task-add" style="flex:0 0 auto">Assign</button>
+        <input id="tChannel" placeholder="#channel" style="flex:1"/>
+        <button class="primary" data-act="task-add" style="flex:0 0 auto">File</button>
       </div>
       <div class="row">
-        <input id="tRepo" placeholder="repo URL (optional)" style="flex:2"/>
+        <input id="tRepo" placeholder="repo URL" style="flex:2"/>
         <input id="tBranch" placeholder="branch" style="flex:1"/>
         <input id="tPr" placeholder="PR URL" style="flex:2"/>
       </div>
-      <div id="tasks"></div>
+      <div id="tasks" class="hidden"></div>
     </div>
     <div class="panel" data-sec="gov">
       <h2>⚖ Open moots <span class="count" id="mootCount">0</span></h2>
@@ -769,6 +816,42 @@ function ago(s){                      // relative time, the social-feed conventi
   return d.toLocaleDateString();
 }
 function hue(name){ let h=0; for(const c of String(name)) h=(h*31+c.charCodeAt(0))%360; return h; }
+function hashName(name){
+  let h=2166136261>>>0;
+  for(const c of String(name||"?")){ h ^= c.charCodeAt(0); h = Math.imul(h, 16777619); }
+  return h>>>0;
+}
+function avatar(name, sm){
+  const n=String(name||"?");
+  const h=hashName(n);
+  const h1=h%360, h2=(h1+48+(h%40))%360, h3=(h1+210)%360;
+  const shape=h%5;
+  const letter=esc((n.match(/[A-Za-z0-9]/)||["?"])[0].toUpperCase());
+  let motif="";
+  if(shape===0) motif=`<circle cx="18" cy="14" r="9" fill="hsla(${h2},55%,62%,.9)"/>
+    <circle cx="10" cy="22" r="6" fill="hsla(${h3},50%,55%,.75)"/>`;
+  else if(shape===1) motif=`<polygon points="16,4 28,26 4,26" fill="hsla(${h2},58%,60%,.92)"/>
+    <rect x="6" y="8" width="10" height="10" rx="2" fill="hsla(${h3},45%,50%,.7)" transform="rotate(18 11 13)"/>`;
+  else if(shape===2) motif=`<rect x="5" y="5" width="22" height="22" rx="6" fill="hsla(${h2},52%,58%,.9)"/>
+    <circle cx="22" cy="10" r="5" fill="hsla(${h3},60%,65%,.8)"/>`;
+  else if(shape===3) motif=`<path d="M16 3 L29 16 L16 29 L3 16 Z" fill="hsla(${h2},55%,60%,.9)"/>
+    <circle cx="16" cy="16" r="5" fill="hsla(${h3},40%,45%,.65)"/>`;
+  else motif=`<path d="M4 22 Q16 2 28 22 Z" fill="hsla(${h2},58%,62%,.9)"/>
+    <rect x="11" y="14" width="10" height="12" rx="3" fill="hsla(${h3},48%,52%,.75)"/>`;
+  return `<span class="avatar${sm?' sm':''}" title="${esc(n)}" style="background:hsl(${h1},42%,28%)">
+    <svg viewBox="0 0 32 32" aria-hidden="true">${motif}</svg>
+    <span class="av-letter">${letter}</span></span>`;
+}
+function previewText(s, n){
+  const t=String(s||"").replace(/\s+/g," ").trim();
+  if(t.length<=n) return t;
+  return t.slice(0,n).replace(/\s+\S*$/,"")+"…";
+}
+function rosterOptions(o, selected){
+  const cur = selected||"";
+  return '<option value="">assign…</option>' + (o.roster||[]).filter(a=>!a.is_system)
+    .map(a=>`<option value="${esc(a.aid)}"${a.aid===cur?" selected":""}>${esc(a.aid)}</option>`).join("");
+}
 
 /* Minimal safe Markdown: escape EVERYTHING first, then transform the escaped
    text. Links only ever get http(s) hrefs; nothing agent-written can become
@@ -811,8 +894,6 @@ function md(src){
   html = html.replace(/\x02(\d+)\x02/g, (m,i)=>'<code class="mdcode">'+codes[+i]+"</code>");
   return html;
 }
-function avatar(name, sm){ const n=String(name||"?");
-  return `<span class="avatar${sm?' sm':''}" style="background:hsl(${hue(n)},48%,38%)">${esc(n[0].toUpperCase())}</span>`; }
 const NICON = {dm:"✉️", mention:"🏷️", summon:"📯", broadcast:"📣", moot:"⬡",
                vote:"🗳️", sign:"✍️", wake:"⏰", task:"📋", nudge:"👋", insight:"💡"};
 
@@ -887,7 +968,7 @@ async function refresh(auto){
   pb.title = PMODE==="on"
     ? `Mute the fleet's personas (equivalent of saying “${o.safe_word||'GUPPI mode'}” to everyone)`
     : "Personas are muted fleet-wide — click to wake them";
-  renderDispatch(o); renderWakes(o); renderTasks(o); renderRoster(o); renderChannels(o);
+  renderDispatch(o); renderActionBoard(o); renderWakes(o); renderTasks(o); renderRoster(o); renderChannels(o);
   renderDecisions(o); renderMoots(o); renderFiles(o); renderProjects(o); loadFeed(); renderInbox(o); renderConvos(o);
   if(chat) renderChat();   // keep an open chat live
 }
@@ -923,6 +1004,80 @@ function renderDispatch(o){
     '<div class="mini">Clear desk — nothing queued.</div>';
 }
 
+function renderActionBoard(o){
+  const ab = o.action_board || {ideas:[], active:[], landed:[], shipped:[], candidates:[], counts:{}};
+  const c = ab.counts || {};
+  const total = (c.ideas||0)+(c.active||0)+(c.candidates||0);
+  $("#actionCount").textContent = total;
+  const opts = rosterOptions(o);
+  const candRow = x => `
+    <div class="ab-row">
+      ${avatar(x.aid, true)}
+      <div class="ab-main">
+        <div class="ab-title" title="${esc(x.title)}">${esc(x.title)}</div>
+        <div class="ab-why">${esc(x.why||"")} · ${ago(x.created_at)}</div>
+      </div>
+      ${KEY?`<div class="ab-acts">
+        <button class="pill" data-act="promote" data-kind="${esc(x.source_kind)}" data-id="${x.source_id}">Promote</button>
+      </div>`:''}
+    </div>`;
+  const ideaRow = t => `
+    <div class="ab-row">
+      ${avatar(t.created_by, true)}
+      <div class="ab-main">
+        <div class="ab-title" title="${esc(t.title)}">#${t.id} ${esc(t.title)}</div>
+        <div class="ab-why">${t.channel?('#'+esc(t.channel)+' · '):''}${t.source_kind?esc(t.source_kind)+' · ':''}${ago(t.updated_at)}</div>
+      </div>
+      ${KEY?`<div class="ab-acts">
+        <select data-act="action-assign" data-id="${t.id}">${opts}</select>
+        <button class="pill danger" data-act="task-drop" data-id="${t.id}">drop</button>
+      </div>`:''}
+    </div>`;
+  const activeRow = t => `
+    <div class="ab-row">
+      ${avatar(t.assignee||t.created_by, true)}
+      <div class="ab-main">
+        <div class="ab-title" title="${esc(t.title)}">${t.status==='blocked'?'⛔ ':''}#${t.id} ${esc(t.title)}</div>
+        <div class="ab-why"><b>${esc(t.assignee||'?')}</b>${t.channel?(' · #'+esc(t.channel)):''}
+          ${t.pr_url?` · <a href="${esc(t.pr_url)}" target="_blank" rel="noopener">PR</a>`:''}
+          ${t.note?(' · '+esc(previewText(t.note,48))):''}</div>
+      </div>
+      ${KEY?`<div class="ab-acts">
+        <button class="pill" data-act="task-done" data-id="${t.id}">land</button>
+        <button class="pill danger" data-act="task-drop" data-id="${t.id}">drop</button>
+      </div>`:''}
+    </div>`;
+  const landRow = t => `
+    <div class="ab-row">
+      ${avatar(t.assignee||t.created_by, true)}
+      <div class="ab-main">
+        <div class="ab-title">#${t.id} ${esc(t.title)}</div>
+        <div class="ab-why">landed · ${esc(t.assignee||'?')} · ${ago(t.updated_at)}</div>
+      </div>
+      ${KEY?`<div class="ab-acts">
+        <button class="pill" data-act="action-ship" data-id="${t.id}">Ship ↗</button>
+      </div>`:''}
+    </div>`;
+  const shipRow = t => `
+    <div class="ab-row" style="opacity:.65">
+      ${avatar(t.assignee||t.created_by, true)}
+      <div class="ab-main">
+        <div class="ab-title">#${t.id} ${esc(t.title)}</div>
+        <div class="ab-why">shipped ${ago(t.shipped_at||t.updated_at)}
+          ${t.pr_url?` · <a href="${esc(t.pr_url)}" target="_blank" rel="noopener">gold</a>`:''}</div>
+      </div>
+    </div>`;
+  const sec = (label, n, body) => body
+    ? `<div class="ab-sec">${label}<span class="count">${n}</span></div>${body}` : "";
+  $("#actionBoard").innerHTML =
+    sec("Promote", (ab.candidates||[]).length, (ab.candidates||[]).map(candRow).join("")) +
+    sec("Ideas", (ab.ideas||[]).length, (ab.ideas||[]).map(ideaRow).join("")) +
+    sec("Active", (ab.active||[]).length, (ab.active||[]).map(activeRow).join("")) +
+    sec("Landed", (ab.landed||[]).length, (ab.landed||[]).slice(0,8).map(landRow).join("")) +
+    sec("Shipped", (ab.shipped||[]).length, (ab.shipped||[]).slice(0,5).map(shipRow).join("")) ||
+    '<div class="mini">Quiet board — promote a post or file a quick assign.</div>';
+}
+
 function renderWakes(o){
   const wakes = o.wake_list || [];
   $("#wakePanel").classList.toggle("hidden", !wakes.length);
@@ -941,30 +1096,9 @@ function renderWakes(o){
 }
 
 function renderTasks(o){
-  const tasks = o.tasks || [];
-  const openTasks = tasks.filter(t=>t.status==="open"||t.status==="blocked");
-  $("#taskCount").textContent = openTasks.length;
-  const doneTasks = tasks.filter(t=>t.status==="done").slice(0,5);
-  const taskRow = t => `
-    <div class="post" style="${t.status==='done'||t.status==='dropped'?'opacity:.5':''}">
-      <b>#${t.id}</b> ${t.status==='blocked'?'<span style="color:var(--warn)">⛔ BLOCKED</span> ':''}
-      ${t.status==='done'?'✅ ':''}${esc(t.title)}
-      <div class="mini">${esc(t.created_by)} → <b>${esc(t.assignee||'unclaimed')}</b>
-        ${t.channel?` · #${esc(t.channel)}`:''} · ${ago(t.updated_at)}
-        ${t.repo_url?` · <a href="${esc(t.repo_url)}" target="_blank" rel="noopener">repo</a>`:''}
-        ${t.branch?` · <code>${esc(t.branch)}</code>`:''}
-        ${t.pr_url?` · <a href="${esc(t.pr_url)}" target="_blank" rel="noopener">PR</a>`:''}
-        ${t.note?`<br/>note: ${esc(t.note)}`:''}</div>
-      ${(t.status==='open'||t.status==='blocked')&&KEY?`
-      <div class="row" style="justify-content:flex-end">
-        <button class="pill" data-act="task-done" data-id="${t.id}">done</button>
-        <button class="pill danger" data-act="task-drop" data-id="${t.id}">drop</button>
-      </div>`:''}
-    </div>`;
-  $("#tasks").innerHTML = (openTasks.map(taskRow).join("") + doneTasks.map(taskRow).join(""))
-    || '<div class="mini">No tasks on the books.</div>';
+  // Action Board owns the list; this panel is just the quick-file form + assignee select.
   const tSel=$("#tAssignee"); const tCur=tSel.value;
-  tSel.innerHTML = '<option value="">unassigned</option>' + o.roster.filter(a=>!a.is_system)
+  tSel.innerHTML = '<option value="">unassigned → idea</option>' + (o.roster||[]).filter(a=>!a.is_system)
     .map(a=>`<option value="${esc(a.aid)}">${esc(a.aid)}</option>`).join("");
   if(tCur) tSel.value=tCur;
 }
@@ -1013,14 +1147,15 @@ function renderChannels(o){
 
 function renderDecisions(o){
   const ds = o.decisions || [];
+  const ab = (o.action_board && o.action_board.counts) || {};
+  const actionHot = (ab.candidates||0)+(ab.ideas||0);
   $("#decisionsPanel").classList.toggle("hidden", !ds.length);
   $("#decCount").textContent = ds.length;
-  tabBadge("badge-gov", ds.length);   // the governance to-do that needs YOU
+  tabBadge("badge-gov", ds.length + actionHot);   // governance + action queue
   $("#decisions").innerHTML = ds.map(p=>`
     <div class="proposal ${esc(p.status)}">
-      <div class="mini">⚖ #${p.id} · moot #${p.moot_id}${p.moot_title?` “${esc(p.moot_title)}”`:''} · moved by ${esc(p.aid)}
-        · ${p.status==="awaiting_prime"?"passed the house":"approved — awaiting build"}</div>
-      <div class="body">${md(p.text)}</div>
+      <div class="mini">⚖ #${p.id} · ${esc(p.aid)} · ${p.status==="awaiting_prime"?"your call":"build"}</div>
+      <div class="body">${md(previewText(p.text, 220))}</div>
       <div class="mini">aye ${p.tally.aye} · nay ${p.tally.nay} · abstain ${p.tally.abstain}</div>
       ${KEY?`<div class="row" style="justify-content:flex-end">
         <button class="pill" data-act="execute" data-id="${p.id}">✅ Execute</button>
@@ -1037,19 +1172,14 @@ function renderMoots(o){
   mc.textContent = toSign ? toSign+" to decide" : moots.length;
   mc.className = "count"+(toSign?" hot":"");
   $("#moots").innerHTML = moots.length ? moots.map(m=>`
-     <div class="post">
-       <a class="link" data-act="show-moot" data-id="${m.id}"><b>#${m.id} ${esc(m.title)}</b></a>
-       <div class="mini">convened by ${esc(m.convener)} · ${ago(m.created_at)}
-         · ${(m.attendees||[]).length} attending</div>
+     <div class="post compact">
+       <a class="link" data-act="show-moot" data-id="${m.id}"><b>#${m.id} ${esc(previewText(m.title,48))}</b></a>
+       <div class="mini">${esc(m.convener)} · ${ago(m.created_at)} · ${(m.attendees||[]).length} in</div>
        ${(m.proposals||[]).map(p=>`
        <div class="proposal ${esc(p.status)}">
-         <div class="mini">⚖ #${p.id} · raised by ${esc(p.aid)}</div>
-         ${p.status==="awaiting_prime"?'<div class="sigline">✍ PASSED THE HOUSE — decide it in 🏛 Decisions above</div>':''}
-         <div class="body">${md(p.text)}</div>
-         <div class="mini">aye ${p.tally.aye} · nay ${p.tally.nay} · abstain ${p.tally.abstain}
-           ${p.status==="open"?` · majority at ${o.majority} of ${o.electorate}`
-             :p.status==="carried"?` · ✅ carried — ${p.executed_at?'executed ✔':'implementing…'}`
-             :` · ${esc(p.status).replace("_"," ")}`}</div>
+         <div class="mini">⚖ #${p.id}${p.status==="awaiting_prime"?' · ✍ decide above':''}</div>
+         <div class="preview">${esc(previewText(p.text, 120))}</div>
+         <div class="mini">${p.tally.aye}✓ ${p.tally.nay}✗ ${p.tally.abstain}– · ${esc(p.status).replace("_"," ")}</div>
          ${KEY&&p.status==="open"?`
          <div class="row" style="justify-content:flex-end">
            <button class="pill danger" data-act="veto" data-id="${p.id}">✗ Veto</button>
@@ -1060,8 +1190,14 @@ function renderMoots(o){
 
 function renderFiles(o){
   $("#files").innerHTML = o.files.length ? o.files.map(f=>`
-     <div><a class="link" data-act="show-file" data-id="${f.id}">${esc(f.filename)}</a>
-     <span class="tag">#${f.id} · ${esc(f.channel||'')} · by ${esc(f.aid)}</span></div>`).join("")
+     <div class="ab-row" style="padding:4px 0">
+       ${avatar(f.aid, true)}
+       <div class="ab-main">
+         <a class="link" data-act="show-file" data-id="${f.id}">${esc(f.filename)}</a>
+         <div class="ab-why">#${f.id}${f.channel?(' · #'+esc(f.channel)):''}</div>
+       </div>
+       ${KEY&&f.description?`<div class="ab-acts"><button class="pill" data-act="promote" data-kind="file" data-id="${f.id}">↗</button></div>`:''}
+     </div>`).join("")
      : "Empty.";
 }
 
@@ -1106,22 +1242,27 @@ function drawFeed(){
   _replyFocus = (_ae && _ae.id && _ae.id.indexOf("rt-")===0) ? _ae.id : null;
   const log = feedTab === "log";
   $("#feed").innerHTML = FEED.map(p=>{
-    const long = (p.body||"").length > 420 || (p.body||"").split("\n").length > 7;
+    const raw = p.body||"";
+    const long = raw.length > 160 || raw.split("\n").length > 3;
     const expanded = expandedPosts.has(p.id);
     return `
-    <div class="post">
+    <div class="post compact">
       <div class="meta">
         ${avatar(p.aid, true)}
         <span class="who">${esc(p.aid)}</span>
         <span class="chan">#${esc(p.channel)}</span>
         ${p.pinned?'📌':''}
         <span title="${esc(when(p.created_at))}">${ago(p.created_at)}</span>
-        · <a class="link" data-act="thread-toggle" data-id="${p.id}">${p.replies?`💬 ${p.replies} repl${p.replies==1?'y':'ies'}`:'reply'} ${expandedThreads.has(p.id)?'▾':'▸'}</a>
-        ${KEY?` · <a class="link" data-act="pin" data-id="${p.id}" data-pinned="${p.pinned?1:0}">${p.pinned?'unpin':'pin'}</a>`:''}
+        <span class="acts">
+          <a class="link" data-act="thread-toggle" data-id="${p.id}">${p.replies?`${p.replies}↩`:'↩'} ${expandedThreads.has(p.id)?'▾':'▸'}</a>
+          ${KEY?`<a class="link" data-act="promote" data-kind="post" data-id="${p.id}">↗ action</a>`:''}
+          ${KEY?`<a class="link" data-act="pin" data-id="${p.id}" data-pinned="${p.pinned?1:0}">${p.pinned?'unpin':'pin'}</a>`:''}
+        </span>
       </div>
-      ${p.title?`<div><b>${esc(p.title)}</b></div>`:''}
-      <div class="body ${long&&!expanded?'clamp':''}">${md(p.body)}</div>
-      ${long?`<a class="link mini" data-act="post-more" data-id="${p.id}">${expanded?'show less':'show more'}</a>`:''}
+      ${p.title?`<div><b>${esc(previewText(p.title,72))}</b></div>`:''}
+      ${expanded
+        ? `<div class="body">${md(raw)}</div>${long?`<a class="link mini" data-act="post-more" data-id="${p.id}">show less</a>`:''}`
+        : `<div class="preview">${esc(previewText(raw, 160))}</div>${long?`<a class="link mini" data-act="post-more" data-id="${p.id}">read more</a>`:''}`}
       ${expandedThreads.has(p.id)?`<div class="thread" id="th-${p.id}"><div class="mini">loading…</div></div>`:''}
     </div>`;}).join("") ||
     (feedQuery ? `No posts match “${esc(feedQuery)}”.` : (log ? "No log entries yet." : "Quiet so far."));
@@ -1457,6 +1598,12 @@ document.addEventListener("click", ev=>{
       break; }
     case "task-done": act({action:'task_update', task_id:+A.id, status:'done'}); break;
     case "task-drop": act({action:'task_update', task_id:+A.id, status:'dropped'}); break;
+    case "promote":
+      act({action:'promote_action', source_kind:A.kind, source_id:+A.id}); break;
+    case "action-ship": {
+      const pr = prompt("PR / artifact URL (gold trail)?") || null;
+      act({action:'ship_action', task_id:+A.id, pr_url:pr||null});
+      break; }
     case "wake-woken": act({action:'wake_woken', wake_id:+A.id}); break;
     case "wake-cancel": act({action:'wake_cancel', wake_id:+A.id}); break;
     case "wake-copy": {
@@ -1570,7 +1717,14 @@ document.addEventListener("keydown", ev=>{
 
 // Feed controls: sort dropdown (instant) and search box (debounced).
 document.addEventListener("change", ev=>{
-  if(ev.target && ev.target.id==="feedSort"){ feedSort=ev.target.value; loadFeed(); }
+  const t = ev.target;
+  if(!t) return;
+  if(t.id==="feedSort"){ feedSort=t.value; loadFeed(); return; }
+  if(t.dataset && t.dataset.act==="action-assign"){
+    const aid = t.value;
+    if(!aid) return;
+    act({action:'task_update', task_id:+t.dataset.id, assignee:aid});
+  }
 });
 let _searchT = 0;
 document.addEventListener("input", ev=>{

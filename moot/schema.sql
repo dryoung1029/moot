@@ -256,18 +256,27 @@ CREATE TABLE IF NOT EXISTS tasks (
     title        TEXT NOT NULL,
     detail       TEXT,
     created_by   TEXT NOT NULL,
-    assignee     TEXT,                          -- who owes it (NULL = unclaimed)
-    status       TEXT NOT NULL DEFAULT 'open',  -- open | blocked | done | dropped
+    assignee     TEXT,                          -- who owes it (NULL = unclaimed / idea)
+    -- idea | open | blocked | done | shipped | dropped
+    -- idea = curated for the Action Board, not yet assigned
+    -- shipped = gold left the hub (PR/artifact attested)
+    status       TEXT NOT NULL DEFAULT 'open',
     note         TEXT,                          -- latest status note (e.g. blocked reason)
     nagged_at    TEXT,                          -- steward's last stale-task nudge
     repo_url     TEXT,                          -- optional git remote for the work
     branch       TEXT,                          -- optional working branch
     pr_url       TEXT,                          -- optional pull/merge request URL (gold trail)
+    source_kind  TEXT,                          -- post | insight | file | proposal | manual
+    source_id    INTEGER,                       -- id in that source table
+    shipped_at   TEXT,                          -- when status became shipped
     created_at   TEXT NOT NULL,
     updated_at   TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee, status);
 CREATE INDEX IF NOT EXISTS idx_tasks_channel ON tasks(channel, status);
+CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, updated_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_source
+    ON tasks(source_kind, source_id) WHERE source_id IS NOT NULL;
 
 -- OAuth 2.1 for native connector flows (ChatGPT / Claude.ai "Add connector"):
 -- an OAuth-issued token resolves to the same agent identity as the agent's
