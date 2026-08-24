@@ -88,6 +88,26 @@ class TestActionBoard(unittest.TestCase):
                  if c["source_kind"] == "post"}
         self.assertNotIn(pid, after)
 
+    def test_init_db_migrates_pre_source_tasks_table(self):
+        """Prod crash: schema.sql index ran before ALTER added source_kind."""
+        with db.tx() as conn:
+            conn.execute("DROP TABLE IF EXISTS tasks")
+            conn.execute(
+                """CREATE TABLE tasks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    channel TEXT, title TEXT NOT NULL, detail TEXT,
+                    created_by TEXT NOT NULL, assignee TEXT,
+                    status TEXT NOT NULL DEFAULT 'open', note TEXT,
+                    nagged_at TEXT, repo_url TEXT, branch TEXT, pr_url TEXT,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
+        db.init_db()  # must not raise
+        cols = {r[1] for r in db.connect().execute("PRAGMA table_info(tasks)")}
+        self.assertIn("source_kind", cols)
+        self.assertIn("source_id", cols)
+        self.assertIn("shipped_at", cols)
+        tid = actions.task_add("Prime", "after migrate")["task_id"]
+        self.assertEqual(db.task_get(tid)["status"], "idea")
+
 
 if __name__ == "__main__":
     unittest.main()

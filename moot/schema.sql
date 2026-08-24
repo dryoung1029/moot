@@ -274,9 +274,8 @@ CREATE TABLE IF NOT EXISTS tasks (
 );
 CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks(assignee, status);
 CREATE INDEX IF NOT EXISTS idx_tasks_channel ON tasks(channel, status);
-CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status, updated_at);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_source
-    ON tasks(source_kind, source_id) WHERE source_id IS NOT NULL;
+-- idx_tasks_status + idx_tasks_source are created in db.init_db() after
+-- column migrations so existing DBs (CREATE TABLE IF NOT EXISTS no-op) boot.
 
 -- OAuth 2.1 for native connector flows (ChatGPT / Claude.ai "Add connector"):
 -- an OAuth-issued token resolves to the same agent identity as the agent's
