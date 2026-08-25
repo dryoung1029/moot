@@ -26,9 +26,11 @@ primary_region = 'iad'
   min_machines_running = 1
 
   [[http_service.checks]]
-    interval = '30s'
+    interval = '15s'
     timeout = '5s'
-    grace_period = '15s'
+    # Boot imports MCP + opens SQLite + migrations; 15s was tight and made
+    # failed boots look like "health check timeout" instead of the real error.
+    grace_period = '60s'
     method = 'GET'
     path = '/healthz'
 

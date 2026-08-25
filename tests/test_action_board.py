@@ -108,6 +108,27 @@ class TestActionBoard(unittest.TestCase):
         tid = actions.task_add("Prime", "after migrate")["task_id"]
         self.assertEqual(db.task_get(tid)["status"], "idea")
 
+    def test_init_db_survives_index_before_column_in_schema(self):
+        """Regression for executescript abort: indexes must not block boot."""
+        with db.tx() as conn:
+            conn.execute("DROP TABLE IF EXISTS tasks")
+            conn.execute(
+                """CREATE TABLE tasks (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    channel TEXT, title TEXT NOT NULL, detail TEXT,
+                    created_by TEXT NOT NULL, assignee TEXT,
+                    status TEXT NOT NULL DEFAULT 'open', note TEXT,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
+            try:
+                conn.executescript(
+                    "CREATE INDEX IF NOT EXISTS idx_boom ON tasks(source_kind)")
+                self.fail("expected executescript to fail without source_kind")
+            except Exception as e:  # noqa: BLE001 — sqlite raises OperationalError
+                self.assertIn("source_kind", str(e))
+        db.init_db()  # tables→migrate→indexes must succeed
+        cols = {r[1] for r in db.connect().execute("PRAGMA table_info(tasks)")}
+        self.assertIn("source_kind", cols)
+
 
 if __name__ == "__main__":
     unittest.main()

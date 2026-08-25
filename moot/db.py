@@ -110,12 +110,56 @@ def tx():
         conn.close()
 
 
+def _sql_statements(script: str) -> list[str]:
+    """Split schema.sql into statements.
+
+    Strips full-line and inline `--` comments before splitting on `;`, so a
+    comment like `-- note: a; b` cannot fracture a CREATE TABLE.
+    """
+    cleaned: list[str] = []
+    for line in script.splitlines():
+        if line.strip().startswith("--"):
+            continue
+        # Drop inline -- comments (schema.sql has no string literals with --).
+        if "--" in line:
+            line = line[: line.index("--")]
+        cleaned.append(line)
+    return [s.strip() for s in "\n".join(cleaned).split(";") if s.strip()]
+
+
+def _is_index_ddl(stmt: str) -> bool:
+    head = stmt.lstrip().upper()
+    return head.startswith("CREATE INDEX") or head.startswith("CREATE UNIQUE INDEX")
+
+
+def _apply_schema_tables(conn: sqlite3.Connection, schema: str) -> None:
+    """CREATE TABLE / PRAGMA only — indexes wait until after column migrations."""
+    for stmt in _sql_statements(schema):
+        if _is_index_ddl(stmt):
+            continue
+        conn.execute(stmt)
+
+
+def _apply_schema_indexes(conn: sqlite3.Connection, schema: str) -> None:
+    """CREATE INDEX after migrations. Tolerate missing columns / already-exists."""
+    for stmt in _sql_statements(schema):
+        if not _is_index_ddl(stmt):
+            continue
+        try:
+            conn.execute(stmt)
+        except sqlite3.OperationalError:
+            pass
+
+
 def init_db() -> None:
     global _FTS
     schema = resources.files("moot").joinpath("schema.sql").read_text(encoding="utf-8")
     ts = now()
     with tx() as conn:
-        conn.executescript(schema)
+        # Tables first, then ALTER migrations, then indexes. Never run the full
+        # schema as executescript: one CREATE INDEX on a not-yet-migrated column
+        # aborts the whole script and crash-loops the Fly machine (0.33.0 outage).
+        _apply_schema_tables(conn, schema)
         # Migrations for databases created before these columns existed
         # (schema.sql's CREATE TABLE IF NOT EXISTS won't alter existing tables).
         for ddl in ("ALTER TABLE agents ADD COLUMN temperament TEXT",
@@ -135,6 +179,7 @@ def init_db() -> None:
                 conn.execute(ddl)
             except sqlite3.OperationalError:
                 pass  # column already present
+        _apply_schema_indexes(conn, schema)
         try:
             conn.execute(
                 """CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_source
