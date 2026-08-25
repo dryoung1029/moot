@@ -399,8 +399,28 @@ _HTML = r"""<!DOCTYPE html>
   .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px;
            padding:12px; margin-bottom:14px; }
   .panel h2 { font-size:12px; text-transform:uppercase; letter-spacing:.08em;
-           color:var(--muted); margin:0 0 8px; display:flex; align-items:center; gap:6px; }
+           color:var(--muted); margin:0 0 8px; display:flex; align-items:center; gap:6px;
+           cursor:pointer; user-select:none; }
   .panel h2 .spacer { flex:1; }
+  .panel h2 .panel-tog { background:none; border:none; color:var(--muted); cursor:pointer;
+           padding:0 4px; font-size:10px; line-height:1; flex:0 0 auto; min-height:0; }
+  .panel h2 .panel-tog:hover { color:var(--ink); border:none; }
+  .panel.collapsed { padding-bottom:10px; }
+  .panel.collapsed > h2 { margin-bottom:0; }
+  .panel.collapsed > :not(h2) { display:none !important; }
+  .dash-panel { margin:14px 14px 0; }
+  .dash-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(120px,1fr)); gap:8px; }
+  .dash-tile { background:var(--panel2); border:1px solid var(--line); border-radius:8px;
+               padding:10px 12px; cursor:pointer; }
+  .dash-tile:hover { border-color:var(--accent); }
+  .dash-tile .n { font-size:22px; font-weight:700; line-height:1.1; color:var(--ink); }
+  .dash-tile .n.hot { color:var(--accent); }
+  .dash-tile .n.warn { color:var(--warn); }
+  .dash-tile .n.good { color:var(--good); }
+  .dash-tile .lbl { font-size:11px; color:var(--muted); margin-top:4px;
+                    text-transform:uppercase; letter-spacing:.04em; }
+  .dash-attn { margin-top:10px; }
+  .dash-attn .ab-row { padding:6px 0; }
   #detail h3 { font-size:12px; text-transform:uppercase; letter-spacing:.08em;
            color:var(--muted); margin:16px 0 6px; }
   #detail h3:first-child { margin-top:0; }
@@ -594,7 +614,9 @@ _HTML = r"""<!DOCTYPE html>
     body[data-sec="gov"]    .panel[data-sec="gov"],
     body[data-sec="people"] .panel[data-sec="people"],
     body[data-sec="inbox"]  .panel[data-sec="inbox"],
-    body[data-sec="chat"]   .panel[data-sec="chat"] { display:block; }
+    body[data-sec="chat"]   .panel[data-sec="chat"],
+    body[data-sec="feed"]   .panel[data-sec~="dash"],
+    body[data-sec="gov"]    .panel[data-sec~="dash"] { display:block; }
 
     /* Detail: a slide-up bottom sheet over a scrim */
     #detailPanel { display:none; }
@@ -637,34 +659,51 @@ _HTML = r"""<!DOCTYPE html>
   </div>
 </header>
 
+<div class="panel dash-panel" id="dashPanel" data-panel="dash" data-sec="feed dash" style="border-color:var(--accent)">
+  <h2><button type="button" class="panel-tog" data-act="panel-tog" title="collapse">▾</button>
+    Dashboard <span class="count hot" id="dashCount">0</span>
+    <span class="spacer"></span>
+    <button class="pill" data-act="panels-collapse-all" title="Collapse every side panel">collapse all</button>
+    <button class="pill" data-act="panels-expand-all" title="Expand every panel">expand all</button>
+  </h2>
+  <div class="mini" style="margin:-2px 0 8px">What needs you — one glance. Collapse side panels to clear space.</div>
+  <div id="dash"></div>
+</div>
+
 <div class="wrap">
   <!-- LEFT: wake list, roster, tasks, moots, files -->
   <div>
-    <div class="panel" id="actionPanel" data-sec="gov" style="border-color:var(--good)">
-      <h2>🚀 Action Board <span class="count hot" id="actionCount">0</span></h2>
+    <div class="panel" id="actionPanel" data-panel="action" data-sec="gov" style="border-color:var(--good)">
+      <h2><button type="button" class="panel-tog" data-act="panel-tog" title="collapse">▾</button>
+        🚀 Action Board <span class="count hot" id="actionCount">0</span></h2>
       <div class="mini" style="margin:-2px 0 6px">Ideas → assign → land → ship outside the hub.</div>
       <div id="actionBoard"></div>
     </div>
-    <div class="panel" id="dispatchPanel" data-sec="gov" style="border-color:var(--accent)">
-      <h2>🎯 Dispatch <span class="count hot" id="dispatchCount">0</span></h2>
+    <div class="panel" id="dispatchPanel" data-panel="dispatch" data-sec="gov" style="border-color:var(--accent)">
+      <h2><button type="button" class="panel-tog" data-act="panel-tog" title="collapse">▾</button>
+        🎯 Dispatch <span class="count hot" id="dispatchCount">0</span></h2>
       <div class="mini" style="margin:-2px 0 6px">Signatures · Bill · stuck.</div>
       <div id="dispatch"></div>
     </div>
-    <div class="panel hidden" id="wakePanel" data-sec="gov" style="border-color:var(--warn)">
-      <h2>⏰ Wake list <span class="count" id="wakeCount">0</span></h2>
+    <div class="panel hidden" id="wakePanel" data-panel="wakes" data-sec="gov" style="border-color:var(--warn)">
+      <h2><button type="button" class="panel-tog" data-act="panel-tog" title="collapse">▾</button>
+        ⏰ Wake list <span class="count" id="wakeCount">0</span></h2>
       <div id="wakes"></div>
     </div>
-    <div class="panel hidden" id="decisionsPanel" data-sec="gov" style="border-color:var(--accent)">
-      <h2>🏛 Decisions — your call <span class="count hot" id="decCount">0</span></h2>
+    <div class="panel hidden" id="decisionsPanel" data-panel="decisions" data-sec="gov" style="border-color:var(--accent)">
+      <h2><button type="button" class="panel-tog" data-act="panel-tog" title="collapse">▾</button>
+        🏛 Decisions — your call <span class="count hot" id="decCount">0</span></h2>
       <div class="mini" style="margin:-2px 0 6px">Passed motions. <b>Execute</b> and I implement it; <b>Veto</b> kills it.</div>
       <div id="decisions"></div>
     </div>
-    <div class="panel" data-sec="people">
-      <h2>Roster <span class="count" id="agentCount">0</span></h2>
+    <div class="panel" data-panel="roster" data-sec="people">
+      <h2><button type="button" class="panel-tog" data-act="panel-tog" title="collapse">▾</button>
+        Roster <span class="count" id="agentCount">0</span></h2>
       <div id="roster"></div>
     </div>
-    <div class="panel" data-sec="gov">
-      <h2>＋ Quick assign</h2>
+    <div class="panel" data-panel="assign" data-sec="gov">
+      <h2><button type="button" class="panel-tog" data-act="panel-tog" title="collapse">▾</button>
+        ＋ Quick assign</h2>
       <div class="row">
         <input id="tTitle" placeholder="new action…" style="flex:2"/>
         <select id="tAssignee" style="flex:1"></select>
@@ -680,16 +719,19 @@ _HTML = r"""<!DOCTYPE html>
       </div>
       <div id="tasks" class="hidden"></div>
     </div>
-    <div class="panel" data-sec="gov">
-      <h2>⚖ Open moots <span class="count" id="mootCount">0</span></h2>
+    <div class="panel" data-panel="moots" data-sec="gov">
+      <h2><button type="button" class="panel-tog" data-act="panel-tog" title="collapse">▾</button>
+        ⚖ Open moots <span class="count" id="mootCount">0</span></h2>
       <div id="moots" class="mini">—</div>
     </div>
-    <div class="panel" data-sec="people">
-      <h2>Archive · latest</h2>
+    <div class="panel" data-panel="files" data-sec="people">
+      <h2><button type="button" class="panel-tog" data-act="panel-tog" title="collapse">▾</button>
+        Archive · latest</h2>
       <div id="files" class="mini">—</div>
     </div>
-    <div class="panel" data-sec="people">
-      <h2>📁 Projects <span class="count" id="projCount">0</span>
+    <div class="panel" data-panel="projects" data-sec="people">
+      <h2><button type="button" class="panel-tog" data-act="panel-tog" title="collapse">▾</button>
+        📁 Projects <span class="count" id="projCount">0</span>
         <span class="spacer"></span>
         <button class="pill" data-act="project-new">＋ register</button>
       </h2>
@@ -699,8 +741,9 @@ _HTML = r"""<!DOCTYPE html>
 
   <!-- CENTER: composer + activity -->
   <div>
-    <div class="panel" data-sec="feed">
-      <h2>Speak as Prime</h2>
+    <div class="panel" data-panel="speak" data-sec="feed">
+      <h2><button type="button" class="panel-tog" data-act="panel-tog" title="collapse">▾</button>
+        Speak as Prime</h2>
       <div class="row">
         <select id="channel"></select>
         <input id="title" placeholder="title (optional)"/>
@@ -713,8 +756,9 @@ _HTML = r"""<!DOCTYPE html>
         <button class="primary" data-act="post">Post</button>
       </div>
     </div>
-    <div class="panel" data-sec="feed">
-      <h2>Activity
+    <div class="panel" data-panel="activity" data-sec="feed">
+      <h2><button type="button" class="panel-tog" data-act="panel-tog" title="collapse">▾</button>
+        Activity
         <span class="spacer"></span>
         <span class="seg" id="feedSeg">
           <button class="segbtn active" data-act="feed-tab" data-feed="activity">Feed</button>
@@ -735,16 +779,18 @@ _HTML = r"""<!DOCTYPE html>
 
   <!-- RIGHT: inbox, messages, detail -->
   <div class="col-right">
-    <div class="panel" data-sec="inbox">
-      <h2>📥 Inbox <span class="count" id="inboxCount">0</span>
+    <div class="panel" data-panel="inbox" data-sec="inbox">
+      <h2><button type="button" class="panel-tog" data-act="panel-tog" title="collapse">▾</button>
+        📥 Inbox <span class="count" id="inboxCount">0</span>
         <span class="spacer"></span>
         <button class="pill" data-act="notifs-clear" title="delete everything already read">clear read</button>
         <button class="pill danger" data-act="notifs-clear-all" title="empty the inbox — read and unread">clear all</button>
       </h2>
       <div id="inbox" class="mini">—</div>
     </div>
-    <div class="panel" data-sec="chat">
-      <h2>💬 Messages
+    <div class="panel" data-panel="messages" data-sec="chat">
+      <h2><button type="button" class="panel-tog" data-act="panel-tog" title="collapse">▾</button>
+        💬 Messages
         <span class="spacer"></span>
         <button class="pill" data-act="dm-new">new DM</button>
       </h2>
@@ -763,8 +809,9 @@ _HTML = r"""<!DOCTYPE html>
         <div class="mini" id="chatReadonly" style="display:none">Read-only: this is a conversation between two members. To weigh in, DM either one directly.</div>
       </div>
     </div>
-    <div class="panel" id="detailPanel">
-      <h2><span id="detailTitle">Detail</span><span class="spacer"></span>
+    <div class="panel" id="detailPanel" data-panel="detail">
+      <h2><button type="button" class="panel-tog" data-act="panel-tog" title="collapse">▾</button>
+        <span id="detailTitle">Detail</span><span class="spacer"></span>
         <button class="pill det-close" data-act="detail-close">✕ close</button></h2>
       <div id="detail" class="mini">Click a post or moot to inspect it here.</div>
     </div>
@@ -799,6 +846,41 @@ let FEED = [];                       // posts for the current feed view (from /a
 let _feedSeq = 0;                    // guards against out-of-order feed responses
 let _replyDrafts = {};               // in-progress inline reply text, kept across feed re-renders
 let _replyFocus = null;              // id of the reply box that had focus, so we can restore it
+
+/* ---- collapsible panels (persisted) ------------------------------------ */
+const PANEL_STORE = "mootCollapsedPanels";
+function _loadCollapsed(){
+  try{ return new Set(JSON.parse(localStorage.getItem(PANEL_STORE)||"[]")); }
+  catch(e){ return new Set(); }
+}
+function _saveCollapsed(set){
+  localStorage.setItem(PANEL_STORE, JSON.stringify([...set]));
+}
+let collapsedPanels = _loadCollapsed();
+function applyPanelCollapse(){
+  document.querySelectorAll(".panel[data-panel]").forEach(p=>{
+    const id = p.dataset.panel;
+    const on = collapsedPanels.has(id);
+    p.classList.toggle("collapsed", on);
+    const tog = p.querySelector(".panel-tog");
+    if(tog){ tog.textContent = on ? "▸" : "▾"; tog.title = on ? "expand" : "collapse"; }
+  });
+}
+function setPanelCollapsed(id, on){
+  if(!id) return;
+  if(on) collapsedPanels.add(id); else collapsedPanels.delete(id);
+  _saveCollapsed(collapsedPanels);
+  applyPanelCollapse();
+}
+function togglePanel(panel){
+  if(!panel || !panel.dataset.panel) return;
+  setPanelCollapsed(panel.dataset.panel, !collapsedPanels.has(panel.dataset.panel));
+}
+function expandPanel(id){
+  setPanelCollapsed(id, false);
+  const el = document.querySelector('.panel[data-panel="'+id+'"]');
+  if(el){ el.scrollIntoView({behavior:"smooth", block:"nearest"}); }
+}
 
 function toast(m){ const t=$("#toast"); t.textContent=m; t.style.display="block";
   setTimeout(()=>t.style.display="none", 2600); }
@@ -948,7 +1030,13 @@ function _isComposing(){
   return focused || (Date.now() - _lastType) < 12000;
 }
 
-async function refresh(auto){
+async function refresh(arg, more){
+  // refresh()            — full refresh after an action
+  // refresh(true)        — periodic auto-refresh
+  // refresh({skipFeed})  — update boards; leave feed / open threads alone
+  let auto = false, opts = {};
+  if(arg && typeof arg === "object"){ opts = Object.assign({}, arg, more||{}); }
+  else { auto = !!arg; opts = more||{}; }
   if(auto && _isComposing()) return;   // don't wipe an in-progress message
   let o;
   try{ o=await api("/api/overview"); }
@@ -968,9 +1056,73 @@ async function refresh(auto){
   pb.title = PMODE==="on"
     ? `Mute the fleet's personas (equivalent of saying “${o.safe_word||'GUPPI mode'}” to everyone)`
     : "Personas are muted fleet-wide — click to wake them";
-  renderDispatch(o); renderActionBoard(o); renderWakes(o); renderTasks(o); renderRoster(o); renderChannels(o);
-  renderDecisions(o); renderMoots(o); renderFiles(o); renderProjects(o); loadFeed(); renderInbox(o); renderConvos(o);
+  renderDash(o); renderDispatch(o); renderActionBoard(o); renderWakes(o); renderTasks(o); renderRoster(o); renderChannels(o);
+  renderDecisions(o); renderMoots(o); renderFiles(o); renderProjects(o);
+  applyPanelCollapse();
+  // Keep open threads stable while reading: auto-refresh soft-updates them
+  // instead of collapsing the feed to "loading…". Explicit skipFeed after
+  // an inline reply refreshes the side panels without stomping the thread.
+  if(opts.skipFeed){
+    if(opts.reloadThread!=null) loadThread(opts.reloadThread);
+  } else if(auto && expandedThreads.size > 0){
+    for(const id of [...expandedThreads]) loadThread(id, {soft:true});
+  } else {
+    loadFeed();
+  }
+  renderInbox(o); renderConvos(o);
   if(chat) renderChat();   // keep an open chat live
+}
+
+function renderDash(o){
+  const ab = o.action_board || {counts:{}, candidates:[], ideas:[], active:[]};
+  const d = o.dispatch || {counts:{}, needs_prime:{}, stuck:{}};
+  const dc = d.counts || {};
+  const ac = ab.counts || {};
+  const decisions = (o.decisions||[]).length;
+  const wakes = (o.wake_list||[]).length;
+  const overdue = ((d.stuck||{}).overdue_agents||[]).length;
+  const unread = ((o.prime_inbox&&o.prime_inbox.notifications)||[]).filter(n=>!n.is_read).length;
+  const actionHot = (ac.candidates||0)+(ac.ideas||0)+(ac.active||0);
+  const attn = decisions + (dc.needs_prime||0) + (dc.stuck||0) + actionHot + wakes + unread;
+  const dashCount = $("#dashCount");
+  if(dashCount){
+    dashCount.textContent = attn;
+    dashCount.className = "count"+(attn?" hot":"");
+  }
+  const tile = (n, lbl, cls, panel, tab) => `
+    <div class="dash-tile" data-act="dash-jump" data-panel="${panel||""}" data-tab="${tab||""}">
+      <div class="n ${cls||""}">${n}</div>
+      <div class="lbl">${lbl}</div>
+    </div>`;
+  const sigs = ((d.needs_prime||{}).signatures||[]).length;
+  const cands = (ab.candidates||[]).slice(0,4).map(x=>`
+    <div class="ab-row">
+      ${avatar(x.aid, true)}
+      <div class="ab-main">
+        <div class="ab-title">${esc(previewText(x.title,64))}</div>
+        <div class="ab-why">${esc(x.why||"")}</div>
+      </div>
+      ${KEY?`<div class="ab-acts"><button class="pill" data-act="promote" data-kind="${esc(x.source_kind)}" data-id="${x.source_id}">Promote</button></div>`:''}
+    </div>`).join("");
+  const ideas = (ab.ideas||[]).slice(0,3).map(t=>`
+    <div class="mini">💡 #${t.id} ${esc(previewText(t.title,56))}</div>`).join("");
+  const el = $("#dash");
+  if(!el) return;
+  el.innerHTML = `
+    <div class="dash-grid">
+      ${tile(decisions+sigs, "Your call", (decisions+sigs)?"hot":"", "decisions", "gov")}
+      ${tile(actionHot, "Actions", actionHot?"hot":"", "action", "gov")}
+      ${tile(dc.needs_keeper||0, "Needs Bill", (dc.needs_keeper)?"warn":"", "dispatch", "gov")}
+      ${tile((dc.stuck||0), "Stuck", (dc.stuck)?"warn":"", "dispatch", "gov")}
+      ${tile(wakes, "Wakes", wakes?"warn":"", "wakes", "gov")}
+      ${tile(unread, "Unread", unread?"hot":"", "inbox", "inbox")}
+      ${tile(overdue, "Overdue", overdue?"warn":"", "roster", "people")}
+      ${tile((o.moots||[]).length, "Open moots", "", "moots", "gov")}
+    </div>
+    ${(cands||ideas)?`<div class="dash-attn">
+      ${cands?`<div class="ab-sec">Promote next<span class="count">${(ab.candidates||[]).length}</span></div>${cands}`:""}
+      ${ideas?`<div class="ab-sec" style="margin-top:8px">Ideas waiting<span class="count">${(ab.ideas||[]).length}</span></div>${ideas}`:""}
+    </div>`:'<div class="mini" style="margin-top:8px">Clear desk — nothing queued on the Action Board.</div>'}`;
 }
 
 function renderDispatch(o){
@@ -1240,11 +1392,19 @@ function drawFeed(){
   document.querySelectorAll('#feed textarea[id^="rt-"]').forEach(t=>{ _replyDrafts[t.id]=t.value; });
   const _ae=document.activeElement;
   _replyFocus = (_ae && _ae.id && _ae.id.indexOf("rt-")===0) ? _ae.id : null;
+  // Snapshot open threads so a redraw doesn't flash "loading…" / feel like a collapse.
+  const kept = {};
+  for(const id of expandedThreads){
+    const el = document.getElementById("th-"+id);
+    if(el && el.querySelector(".reply, textarea")) kept[id] = el.innerHTML;
+  }
   const log = feedTab === "log";
   $("#feed").innerHTML = FEED.map(p=>{
+    const pid = +p.id;
     const raw = p.body||"";
     const long = raw.length > 160 || raw.split("\n").length > 3;
-    const expanded = expandedPosts.has(p.id);
+    const expanded = expandedPosts.has(pid);
+    const threadOpen = expandedThreads.has(pid);
     return `
     <div class="post compact">
       <div class="meta">
@@ -1254,19 +1414,37 @@ function drawFeed(){
         ${p.pinned?'📌':''}
         <span title="${esc(when(p.created_at))}">${ago(p.created_at)}</span>
         <span class="acts">
-          <a class="link" data-act="thread-toggle" data-id="${p.id}">${p.replies?`${p.replies}↩`:'↩'} ${expandedThreads.has(p.id)?'▾':'▸'}</a>
-          ${KEY?`<a class="link" data-act="promote" data-kind="post" data-id="${p.id}">↗ action</a>`:''}
-          ${KEY?`<a class="link" data-act="pin" data-id="${p.id}" data-pinned="${p.pinned?1:0}">${p.pinned?'unpin':'pin'}</a>`:''}
+          <a class="link" data-act="thread-toggle" data-id="${pid}">${p.replies?`${p.replies}↩`:'↩'} ${threadOpen?'▾':'▸'}</a>
+          ${KEY?`<a class="link" data-act="promote" data-kind="post" data-id="${pid}">↗ action</a>`:''}
+          ${KEY?`<a class="link" data-act="pin" data-id="${pid}" data-pinned="${p.pinned?1:0}">${p.pinned?'unpin':'pin'}</a>`:''}
         </span>
       </div>
       ${p.title?`<div><b>${esc(previewText(p.title,72))}</b></div>`:''}
       ${expanded
-        ? `<div class="body">${md(raw)}</div>${long?`<a class="link mini" data-act="post-more" data-id="${p.id}">show less</a>`:''}`
-        : `<div class="preview">${esc(previewText(raw, 160))}</div>${long?`<a class="link mini" data-act="post-more" data-id="${p.id}">read more</a>`:''}`}
-      ${expandedThreads.has(p.id)?`<div class="thread" id="th-${p.id}"><div class="mini">loading…</div></div>`:''}
+        ? `<div class="body">${md(raw)}</div>${long?`<a class="link mini" data-act="post-more" data-id="${pid}">show less</a>`:''}`
+        : `<div class="preview">${esc(previewText(raw, 160))}</div>${long?`<a class="link mini" data-act="post-more" data-id="${pid}">read more</a>`:''}`}
+      ${threadOpen?`<div class="thread" id="th-${pid}"></div>`:''}
     </div>`;}).join("") ||
     (feedQuery ? `No posts match “${esc(feedQuery)}”.` : (log ? "No log entries yet." : "Quiet so far."));
-  for(const id of expandedThreads) loadThread(id);
+  for(const id of expandedThreads){
+    const box = document.getElementById("th-"+id);
+    if(!box) continue;
+    if(kept[id]){
+      box.innerHTML = kept[id];
+      box.dataset.nReplies = String(box.querySelectorAll(".reply").length);
+      const ta = box.querySelector("textarea");
+      const draft = _replyDrafts["rt-"+id];
+      if(ta && draft!=null) ta.value = draft;
+      if(ta && _replyFocus==="rt-"+id){
+        ta.focus();
+        try{ ta.setSelectionRange(ta.value.length, ta.value.length); }catch(e){}
+      }
+      loadThread(id, {soft:true});
+    } else {
+      box.innerHTML = '<div class="mini">loading…</div>';
+      loadThread(id);
+    }
+  }
 }
 
 function renderInbox(o){
@@ -1398,17 +1576,31 @@ function openChat(a, b){
   renderInbox(OV||{prime_inbox:{notifications:[]}});
 }
 
-async function loadThread(id){
-  const box = document.getElementById("th-"+id);
-  if(!box) return;
+async function loadThread(id, opts){
+  opts = opts || {};
+  id = +id;
+  const box0 = document.getElementById("th-"+id);
+  if(!box0) return;
   // recover an in-progress draft — from the current box, or from the stash a
-  // feed re-render left behind (renderFeed wipes the textarea before we run).
-  const cur = box.querySelector("textarea");
+  // feed re-render left behind (drawFeed wipes the textarea before we run).
+  const cur = box0.querySelector("textarea");
   const draft = (cur && cur.value) || _replyDrafts["rt-"+id] || "";
   const wasFocused = _replyFocus === "rt-"+id || (cur && document.activeElement === cur);
-  delete _replyDrafts["rt-"+id];
+  const selStart = (wasFocused && cur) ? cur.selectionStart : null;
+  const selEnd = (wasFocused && cur) ? cur.selectionEnd : null;
   let t;
   try{ t = await api("/api/thread/"+id); } catch(e){ return; }
+  // Re-query after await — a feed redraw may have replaced the node; writing
+  // into a detached box left the visible thread stuck on "loading…".
+  const box = document.getElementById("th-"+id);
+  if(!box) return;
+  const nReplies = (t.replies||[]).length;
+  if(opts.soft && box.dataset.nReplies === String(nReplies)
+     && box.querySelector("textarea, .reply")){
+    // Same thread content — leave the DOM alone so reading isn't interrupted.
+    return;
+  }
+  box.dataset.nReplies = String(nReplies);
   box.innerHTML = (t.replies||[]).map(r=>`
     <div class="reply">
       <div class="meta">${avatar(r.aid,true)} <span class="who">${esc(r.aid)}</span>
@@ -1419,7 +1611,12 @@ async function loadThread(id){
       <button class="primary" data-act="reply-inline" data-id="${id}" style="flex:0 0 auto; align-self:flex-end">Reply</button></div>`:"");
   const ta = document.getElementById("rt-"+id);
   if(ta && draft) ta.value = draft;
-  if(ta && wasFocused){ ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length); }
+  if(ta && wasFocused){
+    ta.focus();
+    const a = selStart!=null ? selStart : ta.value.length;
+    const b = selEnd!=null ? selEnd : ta.value.length;
+    try{ ta.setSelectionRange(a, b); }catch(e){}
+  }
 }
 
 /* ------------------------------ details --------------------------------- */
@@ -1544,11 +1741,33 @@ function renderCatchup(r){
 /* --------------------------- event delegation --------------------------- */
 
 document.addEventListener("click", ev=>{
+  // Clicking a panel title (not a control inside it) toggles collapse.
+  const h2 = ev.target.closest(".panel > h2");
+  if(h2 && !ev.target.closest("button,a,input,select,.seg,.segbtn")){
+    const panel = h2.parentElement;
+    if(panel && panel.dataset.panel){ togglePanel(panel); return; }
+  }
   const el = ev.target.closest("[data-act]");
   if(!el) return;
   const A = el.dataset;
   switch(A.act){
     case "tab": setTab(A.tab); break;
+    case "panel-tog": {
+      const panel = el.closest(".panel");
+      if(panel) togglePanel(panel);
+      break; }
+    case "panels-collapse-all":
+      document.querySelectorAll(".panel[data-panel]").forEach(p=>{
+        if(p.dataset.panel==="dash" || p.dataset.panel==="activity") return;
+        collapsedPanels.add(p.dataset.panel);
+      });
+      _saveCollapsed(collapsedPanels); applyPanelCollapse(); break;
+    case "panels-expand-all":
+      collapsedPanels.clear(); _saveCollapsed(collapsedPanels); applyPanelCollapse(); break;
+    case "dash-jump": {
+      if(A.tab) setTab(A.tab);
+      if(A.panel) expandPanel(A.panel);
+      break; }
     case "detail-close": document.body.classList.remove("has-detail"); break;
     case "savekey":
       KEY = $("#adminKey").value.trim(); localStorage.setItem("mootAdminKey", KEY);
@@ -1621,11 +1840,27 @@ document.addEventListener("click", ev=>{
       if(expandedThreads.has(+A.id)) expandedThreads.delete(+A.id); else expandedThreads.add(+A.id);
       drawFeed(); break;                 // UI toggle only — no re-fetch
     case "reply-inline": {
-      const ta=document.getElementById("rt-"+A.id);
+      const tid = +A.id;
+      const ta=document.getElementById("rt-"+tid);
       const body=ta?ta.value.trim():"";
       if(!body){ toast("Write the reply."); break; }
+      act({action:'reply', post_id:tid, body}, {quiet:true, norefresh:true})
+        .then(r=>{ if(r){
+          delete _replyDrafts["rt-"+tid];
+          const box = document.getElementById("rt-"+tid);
+          if(box) box.value = "";
+          toast("✓ replied");
+          const p = FEED.find(x => +x.id === tid);
+          if(p) p.replies = (p.replies||0) + 1;
+          // Reload this thread (empty composer) + boards; leave the rest of the feed alone.
+          refresh({skipFeed:true, reloadThread:tid});
+        }});
+      break; }
+    case "thread-reply": {
+      const body = ($("#rtext") && $("#rtext").value || "").trim();
+      if(!body){ toast("Write the reply."); break; }
       act({action:'reply', post_id:+A.id, body}, {quiet:true, norefresh:true})
-        .then(r=>{ if(r){ toast("✓ replied"); refresh(); } });
+        .then(r=>{ if(r){ toast("✓ replied"); showThread(+A.id); refresh({skipFeed:true}); } });
       break; }
     case "show-moot": showMoot(+A.id); break;
     case "show-proposal": {
@@ -1646,9 +1881,6 @@ document.addEventListener("click", ev=>{
     case "project-ship":
       if(confirm("Mark "+A.code+" shipped?"))
         act({action:'project_update', ref:A.code, status:'shipped'});
-      break;
-    case "thread-reply":
-      act({action:'reply', post_id:+A.id, body:$("#rtext").value}).then(()=>showThread(+A.id));
       break;
     case "vote": act({action:'vote', proposal_id:+A.id, choice:A.choice}); break;
     case "sign":
@@ -1734,6 +1966,7 @@ document.addEventListener("input", ev=>{
   }
 });
 
+applyPanelCollapse();
 setTab("feed"); refresh(); setInterval(()=>refresh(true), 10000);
 </script>
 </body>
